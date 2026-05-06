@@ -5,8 +5,11 @@
 #define MAX_RELAY_COUNT 8
 
 // Output types for pump entries
-#define OUTPUT_TYPE_GPIO 0   // Direct GPIO pin
-#define OUTPUT_TYPE_I2C  1   // I2C port expander (future)
+#define OUTPUT_TYPE_GPIO    0   // Direct GPIO pin
+#define OUTPUT_TYPE_PCF8574 1   // PCF8574 / PCF8575 I2C GPIO expander
+
+// Convenience alias kept for backward compatibility
+#define OUTPUT_TYPE_I2C OUTPUT_TYPE_PCF8574
 
 struct DeviceConfig {
     char hostname[32]    = "Bewaesserung";
@@ -21,13 +24,15 @@ struct DeviceConfig {
 
 // Per-pump configuration entry
 struct PumpEntry {
-    bool    enabled       = false;
-    char    name[32]      = "";
-    uint8_t outputType    = OUTPUT_TYPE_GPIO;
-    int     pin           = -1;
-    bool    invertLogic   = false;   // active-low per pump
-    int     maxRuntimeSec = 300;     // max runtime / test timeout
-    char    notes[64]     = "";
+    bool    enabled         = false;
+    char    name[32]        = "";
+    uint8_t outputType      = OUTPUT_TYPE_GPIO;
+    int     pin             = -1;           // GPIO pin (OUTPUT_TYPE_GPIO only)
+    uint8_t i2cAddress      = 0x20;        // I2C address (OUTPUT_TYPE_PCF8574 only)
+    uint8_t i2cChannel      = 0;           // Pin/channel on expander (0-7 PCF8574, 0-15 PCF8575)
+    bool    invertLogic     = false;        // active-low per pump
+    int     maxRuntimeSec   = 300;          // max runtime / test timeout
+    char    notes[64]       = "";
 };
 
 struct HardwareConfig {

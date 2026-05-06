@@ -91,6 +91,8 @@ bool ConfigManager::loadHardwareConfig() {
                 p.enabled       = po["enabled"]       | false;
                 p.outputType    = po["outputType"]    | (uint8_t)OUTPUT_TYPE_GPIO;
                 p.pin           = po["pin"]           | -1;
+                p.i2cAddress    = po["i2cAddress"]    | (uint8_t)0x20;
+                p.i2cChannel    = po["i2cChannel"]    | (uint8_t)0;
                 p.invertLogic   = po["invertLogic"]   | false;
                 p.maxRuntimeSec = po["maxRuntimeSec"] | 300;
                 strlcpy(p.name,  po["name"]  | "", sizeof(p.name));
@@ -134,6 +136,8 @@ bool ConfigManager::saveHardwareConfig() {
         po["name"]          = p.name;
         po["outputType"]    = p.outputType;
         po["pin"]           = p.pin;
+        po["i2cAddress"]    = p.i2cAddress;
+        po["i2cChannel"]    = p.i2cChannel;
         po["invertLogic"]   = p.invertLogic;
         po["maxRuntimeSec"] = p.maxRuntimeSec;
         po["notes"]         = p.notes;

@@ -247,26 +247,43 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
   </form>
 </div>
 <script>
+function toggleOutType(i,v){
+  document.getElementById('gpio'+i).style.display=v==='0'?'block':'none';
+  document.getElementById('i2c'+i).style.display=v==='1'?'block':'none';
+}
 function mkRow(i,d){
   d=d||{};
   var e=d.enabled!==false?'checked':'';
   var inv=d.invertLogic?'checked':'';
-  var t0=d.outputType===0?'selected':'';
-  var t1=d.outputType===1?'selected':'';
+  var t=d.outputType||0;
+  var t0=t===0?'selected':'';var t1=t===1?'selected':'';
   var nm=d.name||'';var nt=d.notes||'';
   var pin=d.pin!=null?d.pin:-1;var mr=d.maxRuntimeSec||300;
+  var addr=d.i2cAddress!=null?d.i2cAddress:32;
+  var chan=d.i2cChannel!=null?d.i2cChannel:0;
+  var gpioDisp=t===0?'block':'none';
+  var i2cDisp=t===1?'block':'none';
   return '<div class="pump-entry" style="border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px">'
   +'<b>Pumpe '+(i+1)+'</b>'
   +'<div class="form-row" style="margin-top:6px">'
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_enabled" '+e+'> Aktiv</label></div>'
   +'<div class="form-col"><label>Name</label><input type="text" name="p'+i+'_name" value="'+nm+'" maxlength="31"></div>'
   +'</div><div class="form-row">'
-  +'<div class="form-col"><label>Ausgangstyp</label><select name="p'+i+'_type">'
+  +'<div class="form-col"><label>Ausgangstyp</label><select name="p'+i+'_type" onchange="toggleOutType('+i+',this.value)">'
   +'<option value="0" '+t0+'>GPIO-Pin</option>'
-  +'<option value="1" '+t1+'>I2C (zuk&#252;nftig)</option>'
-  +'</select></div>'
-  +'<div class="form-col"><label>GPIO-Pin (-1=inaktiv)</label><input type="number" name="p'+i+'_pin" value="'+pin+'" min="-1" max="39"></div>'
-  +'</div><div class="form-row">'
+  +'<option value="1" '+t1+'>PCF8574 / PCF8575 (I2C)</option>'
+  +'</select></div></div>'
+  +'<div id="gpio'+i+'" style="display:'+gpioDisp+'">'
+  +'<div class="form-row"><div class="form-col"><label>GPIO-Pin (-1 = inaktiv)</label>'
+  +'<input type="number" name="p'+i+'_pin" value="'+pin+'" min="-1" max="39"></div></div></div>'
+  +'<div id="i2c'+i+'" style="display:'+i2cDisp+'">'
+  +'<div class="form-row">'
+  +'<div class="form-col"><label>I2C-Adresse (dezimal, z.B. 32=0x20)</label>'
+  +'<input type="number" name="p'+i+'_i2cAddr" value="'+addr+'" min="32" max="63" placeholder="32"></div>'
+  +'<div class="form-col"><label>Kanal / Pin (0-15)</label>'
+  +'<input type="number" name="p'+i+'_i2cChan" value="'+chan+'" min="0" max="15"></div>'
+  +'</div></div>'
+  +'<div class="form-row" style="margin-top:4px">'
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_invert" '+inv+'> Aktiv-LOW (invertiert)</label></div>'
   +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label><input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div>'
   +'</div>'
@@ -284,13 +301,16 @@ function rebuildPumps(n){
   var div=document.getElementById('pumpRows');
   var html='';
   for(var i=0;i<n;i++){
-    var pinEl=div.querySelector('[name="p'+i+'_pin"]');
-    if(pinEl){
+    var typeEl=div.querySelector('[name="p'+i+'_type"]');
+    if(typeEl){
+      var t=parseInt(typeEl.value)||0;
       html+=mkRow(i,{
         enabled:getChk(div,'[name="p'+i+'_enabled"]'),
         name:getVal(div,'[name="p'+i+'_name"]'),
-        outputType:parseInt(getVal(div,'[name="p'+i+'_type"]')||'0'),
-        pin:parseInt(pinEl.value),
+        outputType:t,
+        pin:parseInt(getVal(div,'[name="p'+i+'_pin"]')||'-1'),
+        i2cAddress:parseInt(getVal(div,'[name="p'+i+'_i2cAddr"]')||'32'),
+        i2cChannel:parseInt(getVal(div,'[name="p'+i+'_i2cChan"]')||'0'),
         invertLogic:getChk(div,'[name="p'+i+'_invert"]'),
         maxRuntimeSec:parseInt(getVal(div,'[name="p'+i+'_maxRuntime"]')||'300'),
         notes:getVal(div,'[name="p'+i+'_notes"]')

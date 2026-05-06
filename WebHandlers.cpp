@@ -287,7 +287,7 @@ static void handleSaveLocation() {
 
 static String buildPumpRowHtml(int i, const PumpEntry& p) {
     String r;
-    r.reserve(700);
+    r.reserve(900);
     r += "<div class=\"pump-entry\" style=\"border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px\">";
     r += "<b>Pumpe "; r += (i + 1); r += "</b>";
     r += "<div class=\"form-row\" style=\"margin-top:6px\">";
@@ -296,14 +296,27 @@ static String buildPumpRowHtml(int i, const PumpEntry& p) {
     r += "> Aktiv</label></div>";
     r += "<div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"p"; r += i; r += "_name\" value=\"";
     r += String(p.name); r += "\" maxlength=\"31\"></div></div>";
+    // Output type selector
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Ausgangstyp</label><select name=\"p"; r += i; r += "_type\">";
-    r += "<option value=\"0\""; if (p.outputType == OUTPUT_TYPE_GPIO) r += " selected"; r += ">GPIO-Pin</option>";
-    r += "<option value=\"1\""; if (p.outputType == OUTPUT_TYPE_I2C)  r += " selected"; r += ">I2C (zuk&#252;nftig)</option>";
-    r += "</select></div>";
-    r += "<div class=\"form-col\"><label>GPIO-Pin (-1=inaktiv)</label><input type=\"number\" name=\"p"; r += i; r += "_pin\" value=\"";
-    r += p.pin; r += "\" min=\"-1\" max=\"39\"></div></div>";
+    r += "<div class=\"form-col\"><label>Ausgangstyp</label><select name=\"p"; r += i; r += "_type\" onchange=\"toggleOutType("; r += i; r += ",this.value)\">";
+    r += "<option value=\"0\""; if (p.outputType == OUTPUT_TYPE_GPIO)    r += " selected"; r += ">GPIO-Pin</option>";
+    r += "<option value=\"1\""; if (p.outputType == OUTPUT_TYPE_PCF8574) r += " selected"; r += ">PCF8574 / PCF8575 (I2C)</option>";
+    r += "</select></div></div>";
+    // GPIO-specific fields
+    bool isI2C = (p.outputType == OUTPUT_TYPE_PCF8574);
+    r += "<div id=\"gpio"; r += i; r += "\" style=\"display:"; r += (isI2C ? "none" : "block"); r += "\">";
     r += "<div class=\"form-row\">";
+    r += "<div class=\"form-col\"><label>GPIO-Pin (-1 = inaktiv)</label><input type=\"number\" name=\"p"; r += i; r += "_pin\" value=\"";
+    r += p.pin; r += "\" min=\"-1\" max=\"39\"></div></div></div>";
+    // I2C-specific fields
+    r += "<div id=\"i2c"; r += i; r += "\" style=\"display:"; r += (isI2C ? "block" : "none"); r += "\">";
+    r += "<div class=\"form-row\">";
+    r += "<div class=\"form-col\"><label>I2C-Adresse (dezimal, z.B. 32=0x20)</label><input type=\"number\" name=\"p"; r += i; r += "_i2cAddr\" value=\"";
+    r += p.i2cAddress; r += "\" min=\"32\" max=\"63\" placeholder=\"32\"></div>";
+    r += "<div class=\"form-col\"><label>Kanal / Pin (0-15)</label><input type=\"number\" name=\"p"; r += i; r += "_i2cChan\" value=\"";
+    r += p.i2cChannel; r += "\" min=\"0\" max=\"15\"></div></div></div>";
+    // Common fields
+    r += "<div class=\"form-row\" style=\"margin-top:4px\">";
     r += "<div class=\"form-col\"><label><input type=\"checkbox\" name=\"p"; r += i; r += "_invert\"";
     if (p.invertLogic) r += " checked";
     r += "> Aktiv-LOW (invertiert)</label></div>";
@@ -353,6 +366,8 @@ static void handleSaveHardware() {
             snprintf(key, sizeof(key), "p%d_enabled", i);    p.enabled       = g_server->hasArg(key);
             snprintf(key, sizeof(key), "p%d_type", i);       p.outputType    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 1);
             snprintf(key, sizeof(key), "p%d_pin", i);        p.pin           = g_server->hasArg(key) ? g_server->arg(key).toInt() : -1;
+            snprintf(key, sizeof(key), "p%d_i2cAddr", i);    p.i2cAddress    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0x20, 0x20, 0x3F);
+            snprintf(key, sizeof(key), "p%d_i2cChan", i);    p.i2cChannel    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 15);
             snprintf(key, sizeof(key), "p%d_invert", i);     p.invertLogic   = g_server->hasArg(key);
             snprintf(key, sizeof(key), "p%d_maxRuntime", i); p.maxRuntimeSec = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 1, 3600) : 300;
             snprintf(key, sizeof(key), "p%d_name", i);
@@ -362,15 +377,17 @@ static void handleSaveHardware() {
         }
     }
 
-    // Validate: check for duplicate pins
+    // Validate: check for duplicate GPIO pins
     for (int i = 0; i < newHw.relayCount; i++) {
-        if (!newHw.pumps[i].enabled || newHw.pumps[i].pin < 0) continue;
+        const PumpEntry& pi = newHw.pumps[i];
+        if (!pi.enabled || pi.outputType != OUTPUT_TYPE_GPIO || pi.pin < 0) continue;
         for (int j = i + 1; j < newHw.relayCount; j++) {
-            if (!newHw.pumps[j].enabled || newHw.pumps[j].pin < 0) continue;
-            if (newHw.pumps[i].pin == newHw.pumps[j].pin) {
+            const PumpEntry& pj = newHw.pumps[j];
+            if (!pj.enabled || pj.outputType != OUTPUT_TYPE_GPIO || pj.pin < 0) continue;
+            if (pi.pin == pj.pin) {
                 String page = buildPage(HTML_ERROR_PAGE);
                 page = replaceToken(page, "{error_msg}",
-                    "Doppelte Pin-Belegung: GPIO " + String(newHw.pumps[i].pin) +
+                    "Doppelte GPIO-Pin-Belegung: Pin " + String(pi.pin) +
                     " ist Pumpe " + String(i + 1) + " und Pumpe " + String(j + 1) + " zugewiesen.");
                 page = replaceToken(page, "{back_url}", "/config_hardware");
                 g_server->send(400, "text/html; charset=UTF-8", page);
@@ -380,14 +397,34 @@ static void handleSaveHardware() {
     }
     // Validate: check GPIO pin range
     for (int i = 0; i < newHw.relayCount; i++) {
-        if (!newHw.pumps[i].enabled || newHw.pumps[i].pin < 0) continue;
-        if (newHw.pumps[i].pin > 39) {
+        const PumpEntry& p = newHw.pumps[i];
+        if (!p.enabled || p.outputType != OUTPUT_TYPE_GPIO || p.pin < 0) continue;
+        if (p.pin > 39) {
             String page = buildPage(HTML_ERROR_PAGE);
             page = replaceToken(page, "{error_msg}",
-                "Ung&#252;ltiger GPIO-Pin " + String(newHw.pumps[i].pin) + " bei Pumpe " + String(i + 1) + " (g&#252;ltig: -1 oder 0-39).");
+                "Ung&#252;ltiger GPIO-Pin " + String(p.pin) + " bei Pumpe " + String(i + 1) + " (g&#252;ltig: -1 oder 0-39).");
             page = replaceToken(page, "{back_url}", "/config_hardware");
             g_server->send(400, "text/html; charset=UTF-8", page);
             return;
+        }
+    }
+    // Validate: check for duplicate PCF8574 address+channel combinations
+    for (int i = 0; i < newHw.relayCount; i++) {
+        const PumpEntry& pi = newHw.pumps[i];
+        if (!pi.enabled || pi.outputType != OUTPUT_TYPE_PCF8574) continue;
+        for (int j = i + 1; j < newHw.relayCount; j++) {
+            const PumpEntry& pj = newHw.pumps[j];
+            if (!pj.enabled || pj.outputType != OUTPUT_TYPE_PCF8574) continue;
+            if (pi.i2cAddress == pj.i2cAddress && pi.i2cChannel == pj.i2cChannel) {
+                String page = buildPage(HTML_ERROR_PAGE);
+                page = replaceToken(page, "{error_msg}",
+                    "Doppelte I2C-Belegung: PCF8574 Adresse 0x" +
+                    String(pi.i2cAddress, HEX) + " Kanal " + String(pi.i2cChannel) +
+                    " ist Pumpe " + String(i + 1) + " und Pumpe " + String(j + 1) + " zugewiesen.");
+                page = replaceToken(page, "{back_url}", "/config_hardware");
+                g_server->send(400, "text/html; charset=UTF-8", page);
+                return;
+            }
         }
     }
 
