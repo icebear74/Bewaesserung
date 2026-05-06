@@ -3,8 +3,8 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <time.h>
-#include "core/ConfigManager.h"
-#include "hw/Ds3231Manager.h"
+#include "ConfigManager.h"
+#include "Ds3231Manager.h"
 
 #define NTP_UPDATE_INTERVAL_MS 3600000UL  // 1 hour
 

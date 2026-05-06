@@ -1,12 +1,12 @@
 #include "Application.h"
 #include "StateManager.h"
 #include "ConfigManager.h"
-#include "../net/WifiManager.h"
-#include "../net/TimeSync.h"
-#include "../hw/OledStatus.h"
-#include "../hw/Ds3231Manager.h"
-#include "../hw/RelayManager.h"
-#include "../web/WebServer.h"
+#include "WifiManager.h"
+#include "TimeSync.h"
+#include "OledStatus.h"
+#include "Ds3231Manager.h"
+#include "RelayManager.h"
+#include "WebServerManager.h"
 #include <Wire.h>
 
 Application::Application() {}

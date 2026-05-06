@@ -1,13 +1,13 @@
 #include "WebHandlers.h"
-#include "WebServer.h"
+#include "WebServerManager.h"
 #include "WebPages.h"
-#include "core/Application.h"
-#include "core/ConfigManager.h"
-#include "core/StateManager.h"
-#include "net/WifiManager.h"
-#include "net/TimeSync.h"
-#include "hw/Ds3231Manager.h"
-#include "hw/RelayManager.h"
+#include "Application.h"
+#include "ConfigManager.h"
+#include "StateManager.h"
+#include "WifiManager.h"
+#include "TimeSync.h"
+#include "Ds3231Manager.h"
+#include "RelayManager.h"
 #include <WebServer.h>
 #include <WiFi.h>
 

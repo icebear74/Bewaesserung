@@ -1,6 +1,6 @@
-#include "WebServer.h"
+#include "WebServerManager.h"
 #include "WebHandlers.h"
-#include "core/Application.h"
+#include "Application.h"
 #include <WiFi.h>
 
 WebServerManager::WebServerManager() {}
