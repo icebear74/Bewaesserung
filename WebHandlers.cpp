@@ -360,7 +360,7 @@ static void handleSaveHardware() {
 
     for (int i = 0; i < MAX_RELAY_COUNT; i++) {
         PumpEntry& p = newHw.pumps[i];
-        p = PumpEntry{};
+        // Elements beyond relayCount keep their default-initialized (disabled) state.
         if (i < newHw.relayCount) {
             char key[24];
             snprintf(key, sizeof(key), "p%d_enabled", i);    p.enabled       = g_server->hasArg(key);

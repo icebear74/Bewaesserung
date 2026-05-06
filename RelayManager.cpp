@@ -183,7 +183,12 @@ void RelayManager::update() {
     // comparison after ~49 days when millis() rolls over.
     static const unsigned long MILLIS_HALF_RANGE = 0x80000000UL;
     for (int i = 0; i < _config.relayCount; i++) {
-        // Unsigned subtraction wraps correctly: fires when elapsed >= timeout
+        // Standard Arduino millis() wraparound-safe "has deadline passed?" pattern:
+        // _testOffAt[i] is set to millis() + timeout, i.e. a future timestamp.
+        // Case A – not yet reached (now < _testOffAt): unsigned subtraction
+        //          underflows to a huge value (>= MILLIS_HALF_RANGE) → FALSE, no shutoff.
+        // Case B – deadline reached  (now >= _testOffAt): result is small
+        //          (0 .. elapsed ms) < MILLIS_HALF_RANGE → TRUE, shutoff triggered.
         if (_testOffAt[i] != 0 && (now - _testOffAt[i]) < MILLIS_HALF_RANGE) {
             writeRelay(i, false);
             _relayState[i] = false;
