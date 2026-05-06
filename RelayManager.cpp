@@ -116,9 +116,12 @@ bool RelayManager::testDeactivateRelay(int index) {
 
 void RelayManager::update() {
     unsigned long now = millis();
+    // MILLIS_HALF_RANGE: half of unsigned long range; used for wraparound-safe
+    // comparison after ~49 days when millis() rolls over.
+    static const unsigned long MILLIS_HALF_RANGE = 0x80000000UL;
     for (int i = 0; i < _config.relayCount; i++) {
-        // Use unsigned subtraction for correct wraparound behaviour (~49-day cycle)
-        if (_testOffAt[i] != 0 && (now - _testOffAt[i]) < 0x80000000UL) {
+        // Unsigned subtraction wraps correctly: fires when elapsed >= timeout
+        if (_testOffAt[i] != 0 && (now - _testOffAt[i]) < MILLIS_HALF_RANGE) {
             writeRelay(i, false);
             _relayState[i] = false;
             _testOffAt[i]  = 0;

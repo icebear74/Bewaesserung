@@ -539,16 +539,17 @@ static void handleSaveWatering() {
     WateringConfig& wc  = cfg->getWateringConfig();
     wc.count = 0;
 
-    // Scan all possible indices; collect entries where relay field is present.
-    // Use 4x MAX_WATERING_ENTRIES to accommodate indices from deleted+re-added
-    // entries (JS nextIdx only ever increments, gaps from deletions leave holes).
-    for (int n = 0; n < MAX_WATERING_ENTRIES * 4 && wc.count < MAX_WATERING_ENTRIES; n++) {
+    // Scan indices up to SCAN_LIMIT to accommodate gaps left by deleted entries:
+    // JS nextIdx only ever increments, so deleted+re-added cycles can raise
+    // the highest index beyond MAX_WATERING_ENTRIES.  4x gives plenty of headroom.
+    constexpr int ENTRY_INDEX_SCAN_LIMIT = MAX_WATERING_ENTRIES * 4;
+    for (int n = 0; n < ENTRY_INDEX_SCAN_LIMIT && wc.count < MAX_WATERING_ENTRIES; n++) {
         char key[20];
         snprintf(key, sizeof(key), "e%d_relay", n);
         if (!g_server->hasArg(key)) continue;
 
         WateringEntry& e = wc.entries[wc.count++];
-        e.relay = constrain(g_server->arg(key).toInt(), 0, std::max(hw.relayCount - 1, 0));
+        e.relay = constrain(g_server->arg(key).toInt(), 0, hw.relayCount > 0 ? hw.relayCount - 1 : 0);
 
         // Parse time field (HH:MM)
         snprintf(key, sizeof(key), "e%d_time", n);

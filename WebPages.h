@@ -195,7 +195,8 @@ function searchLocation(){
   if(!q) return;
   var st = document.getElementById('searchStatus');
   st.textContent = 'Suche...';
-  fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(q)+'&format=json&limit=1&accept-language=de&email=esp32-irrigation@device')
+  // Note: browser's User-Agent is sent automatically, satisfying Nominatim's identification requirement
+  fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(q)+'&format=json&limit=1&accept-language=de')
   .then(function(r){return r.json();})
   .then(function(data){
     if(data && data.length > 0){
