@@ -142,6 +142,8 @@ bool ConfigManager::loadHardwareConfig() {
                             snprintf(nameBuf, sizeof(nameBuf), "Expander %d", d + 1);
                             strlcpy(e.name, nameBuf, sizeof(e.name));
                             p.expanderIndex = (uint8_t)d;
+                            Serial.printf("[Config] Migration: created expander entry %d for address 0x%02X (pump %d).\n",
+                                          d + 1, oldAddr, i + 1);
                         }
                     }
                 }
