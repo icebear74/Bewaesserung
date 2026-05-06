@@ -134,16 +134,15 @@ time_t GeneralTimeConverter::calculateRuleDate(int year, const Rule& rule, int o
     int mday = 1 + diff;
 
     if (rule.week == 5) {
-        // Last occurrence
-        while (mday + 7 <= 28 + (rule.month == 2 ? 0 : 3)) {  // safe upper bound
-            struct tm tmp = {};
-            tmp.tm_year = year - 1900;
-            tmp.tm_mon  = rule.month - 1;
-            tmp.tm_mday = mday + 7;
-            time_t probe = myTimegm(&tmp);
-            if (gmtime(&probe)->tm_mon == rule.month - 1) mday += 7;
-            else break;
+        // Last occurrence: advance by 7 days while still in the same month
+        static const int daysInMonth[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+        int maxDay = daysInMonth[rule.month];
+        // Adjust for leap year in February
+        if (rule.month == 2) {
+            bool leap = ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
+            if (leap) maxDay = 29;
         }
+        while (mday + 7 <= maxDay) mday += 7;
     } else {
         mday += (rule.week - 1) * 7;
     }

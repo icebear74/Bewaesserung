@@ -10,7 +10,7 @@ void RelayManager::begin(HardwareConfig& config) {
         int pin = _config.relayPins[i];
         if (pin < 0) continue;
         pinMode(pin, OUTPUT);
-        // Write safe state immediately before setting direction is established
+        // Set safe (off) state immediately after configuring direction
         writeRelay(i, false);
     }
     allOff();  // Ensure all are off

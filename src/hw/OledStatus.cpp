@@ -32,7 +32,7 @@ void OledStatus::showBoot() {
     if (!_initialized) return;
     _u8g2.clearBuffer();
     _u8g2.setFont(u8g2_font_ncenB14_tr);
-    _u8g2.drawStr(10, 24, "Bewasserung");
+    _u8g2.drawStr(10, 24, "Bew\xE4sserung");
     _u8g2.setFont(u8g2_font_ncenB08_tr);
     _u8g2.drawStr(28, 44, "Phase 1 v1.0");
     _u8g2.drawStr(36, 58, "Booting...");
@@ -135,7 +135,7 @@ void OledStatus::showNormal(const char* ip, const char* timeStr,
     } else if (ds3231Missing) {
         _u8g2.drawStr(0, 50, "! RTC fehlt");
     } else if (wateringLocked) {
-        _u8g2.drawStr(0, 50, "! Kein Bewss.-Plan");
+        _u8g2.drawStr(0, 50, "! Kein Bew\xE4ss.-Plan");
     } else {
         _u8g2.drawStr(0, 50, "Betrieb OK");
     }
