@@ -283,44 +283,95 @@ static void handleSaveLocation() {
     Serial.println("[Web] POST /save_location – live applied.");
 }
 
+// ─── Helper: build expander (optional hardware) HTML row ─────────────────────
+
+static String buildExpanderRowHtml(int i, const ExpanderEntry& e) {
+    String r;
+    r.reserve(600);
+    r += "<div class=\"pump-entry\" style=\"border:1px solid #cce0ff;padding:10px;margin-bottom:8px;border-radius:4px;background:#f5f9ff\">";
+    r += "<b>Expander "; r += (i + 1); r += "</b>";
+    r += "<div class=\"form-row\" style=\"margin-top:6px\">";
+    r += "<div class=\"form-col\"><label><input type=\"checkbox\" name=\"ex"; r += i; r += "_enabled\"";
+    if (e.enabled) r += " checked";
+    r += "> Aktiv</label></div>";
+    r += "<div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"ex"; r += i;
+    r += "_name\" value=\""; r += String(e.name); r += "\" maxlength=\"31\"></div></div>";
+    r += "<div class=\"form-row\">";
+    r += "<div class=\"form-col\"><label>Chiptyp</label><select name=\"ex"; r += i; r += "_type\">";
+    r += "<option value=\"0\""; if (e.chipType == EXPANDER_TYPE_PCF8574) r += " selected";
+    r += ">PCF8574 (8 Ports, 0x20&#x2013;0x27)</option>";
+    r += "<option value=\"1\""; if (e.chipType == EXPANDER_TYPE_PCF8575) r += " selected";
+    r += ">PCF8575 (16 Ports, 0x20&#x2013;0x27)</option>";
+    r += "</select></div>";
+    r += "<div class=\"form-col\"><label>I2C-Adresse (dez., 32=0x20 &#x2026; 39=0x27)</label>";
+    r += "<input type=\"number\" name=\"ex"; r += i; r += "_addr\" value=\"";
+    r += e.i2cAddress; r += "\" min=\"32\" max=\"39\"></div></div>";
+    r += "</div>";
+    return r;
+}
+
 // ─── Helper: build per-pump HTML row ─────────────────────────────────────────
 
-static String buildPumpRowHtml(int i, const PumpEntry& p) {
+static String buildPumpRowHtml(int i, const PumpEntry& p, const HardwareConfig& hw) {
     String r;
-    r.reserve(900);
+    r.reserve(1000);
     r += "<div class=\"pump-entry\" style=\"border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px\">";
     r += "<b>Pumpe "; r += (i + 1); r += "</b>";
     r += "<div class=\"form-row\" style=\"margin-top:6px\">";
     r += "<div class=\"form-col\"><label><input type=\"checkbox\" name=\"p"; r += i; r += "_enabled\"";
     if (p.enabled) r += " checked";
     r += "> Aktiv</label></div>";
-    r += "<div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"p"; r += i; r += "_name\" value=\"";
-    r += String(p.name); r += "\" maxlength=\"31\"></div></div>";
+    r += "<div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"p"; r += i;
+    r += "_name\" value=\""; r += String(p.name); r += "\" maxlength=\"31\"></div></div>";
     // Output type selector
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Ausgangstyp</label><select name=\"p"; r += i; r += "_type\" onchange=\"toggleOutType("; r += i; r += ",this.value)\">";
-    r += "<option value=\"0\""; if (p.outputType == OUTPUT_TYPE_GPIO)    r += " selected"; r += ">GPIO-Pin</option>";
-    r += "<option value=\"1\""; if (p.outputType == OUTPUT_TYPE_PCF8574) r += " selected"; r += ">PCF8574 / PCF8575 (I2C)</option>";
+    r += "<div class=\"form-col\"><label>Ausgangstyp</label><select name=\"p"; r += i;
+    r += "_type\" onchange=\"toggleOutType("; r += i; r += ",this.value)\">";
+    r += "<option value=\"0\""; if (p.outputType == OUTPUT_TYPE_GPIO)    r += " selected"; r += ">Direkt-GPIO</option>";
+    r += "<option value=\"1\""; if (p.outputType == OUTPUT_TYPE_PCF8574) r += " selected"; r += ">I2C Expander (PCF8574/8575)</option>";
     r += "</select></div></div>";
     // GPIO-specific fields
     bool isI2C = (p.outputType == OUTPUT_TYPE_PCF8574);
     r += "<div id=\"gpio"; r += i; r += "\" style=\"display:"; r += (isI2C ? "none" : "block"); r += "\">";
-    r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>GPIO-Pin (-1 = inaktiv)</label><input type=\"number\" name=\"p"; r += i; r += "_pin\" value=\"";
+    r += "<div class=\"form-row\"><div class=\"form-col\"><label>GPIO-Pin (-1 = inaktiv)</label>";
+    r += "<input type=\"number\" name=\"p"; r += i; r += "_pin\" value=\"";
     r += p.pin; r += "\" min=\"-1\" max=\"39\"></div></div></div>";
-    // I2C-specific fields
+    // I2C-specific fields: expander dropdown + channel
     r += "<div id=\"i2c"; r += i; r += "\" style=\"display:"; r += (isI2C ? "block" : "none"); r += "\">";
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>I2C-Adresse (dezimal, z.B. 32=0x20)</label><input type=\"number\" name=\"p"; r += i; r += "_i2cAddr\" value=\"";
-    r += p.i2cAddress; r += "\" min=\"32\" max=\"63\" placeholder=\"32\"></div>";
-    r += "<div class=\"form-col\"><label>Kanal / Pin (0-15)</label><input type=\"number\" name=\"p"; r += i; r += "_i2cChan\" value=\"";
-    r += p.i2cChannel; r += "\" min=\"0\" max=\"15\"></div></div></div>";
+    r += "<div class=\"form-col\"><label>Expander</label><select name=\"p"; r += i;
+    r += "_expander\" onchange=\"onExpanderChange("; r += i; r += ",this)\">";
+    if (hw.expanderCount == 0) {
+        r += "<option value=\"0\" disabled>&#x26A0; Kein Expander definiert &#x2013; erst Expander anlegen</option>";
+    } else {
+        for (int e = 0; e < hw.expanderCount; e++) {
+            char hexBuf[8];
+            snprintf(hexBuf, sizeof(hexBuf), "0x%02X", hw.expanders[e].i2cAddress);
+            r += "<option value=\""; r += e; r += "\"";
+            if (p.expanderIndex == (uint8_t)e) r += " selected";
+            r += ">"; r += String(hw.expanders[e].name); r += " (";
+            r += hexBuf; r += ", ";
+            r += (hw.expanders[e].chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575" : "PCF8574";
+            r += ")</option>";
+        }
+    }
+    r += "</select></div>";
+    uint8_t maxChan = 7;
+    if (p.expanderIndex < (uint8_t)hw.expanderCount &&
+        hw.expanders[p.expanderIndex].chipType == EXPANDER_TYPE_PCF8575) {
+        maxChan = 15;
+    }
+    r += "<div class=\"form-col\"><label>Kanal (0&#x2013;"; r += maxChan; r += ")</label>";
+    r += "<input type=\"number\" name=\"p"; r += i; r += "_i2cChan\" id=\"chan"; r += i;
+    r += "\" value=\""; r += p.i2cChannel; r += "\" min=\"0\" max=\""; r += maxChan; r += "\"></div>";
+    r += "</div></div>";
     // Common fields
     r += "<div class=\"form-row\" style=\"margin-top:4px\">";
     r += "<div class=\"form-col\"><label><input type=\"checkbox\" name=\"p"; r += i; r += "_invert\"";
     if (p.invertLogic) r += " checked";
     r += "> Aktiv-LOW (invertiert)</label></div>";
-    r += "<div class=\"form-col\"><label>Max. Test-Laufzeit (s)</label><input type=\"number\" name=\"p"; r += i; r += "_maxRuntime\" value=\"";
+    r += "<div class=\"form-col\"><label>Max. Test-Laufzeit (s)</label>";
+    r += "<input type=\"number\" name=\"p"; r += i; r += "_maxRuntime\" value=\"";
     r += p.maxRuntimeSec; r += "\" min=\"1\" max=\"3600\"></div></div>";
     r += "<label>Notizen</label><input type=\"text\" name=\"p"; r += i; r += "_notes\" value=\"";
     r += String(p.notes); r += "\" maxlength=\"63\">";
@@ -337,11 +388,37 @@ static String buildPumpRowHtml(int i, const PumpEntry& p) {
 static void handleConfigHardware() {
     HardwareConfig& hw = g_app->getConfigManager()->getHardwareConfig();
     String page = buildPage(HTML_HARDWARE_PAGE);
-    page = replaceToken(page, "{pumpCount}", String(hw.relayCount));
 
+    // ── Expander section ──────────────────────────────────────────────────────
+    page = replaceToken(page, "{expanderCount}", String(hw.expanderCount));
+    String expanderRowsHtml;
+    for (int i = 0; i < hw.expanderCount; i++) {
+        expanderRowsHtml += buildExpanderRowHtml(i, hw.expanders[i]);
+    }
+    page = replaceToken(page, "{expander_rows_html}", expanderRowsHtml);
+
+    // Build JSON array of expanders for use in the JS pump dropdown
+    String expandersJson = "[";
+    for (int i = 0; i < hw.expanderCount; i++) {
+        if (i > 0) expandersJson += ",";
+        char hexBuf[8];
+        snprintf(hexBuf, sizeof(hexBuf), "0x%02X", hw.expanders[i].i2cAddress);
+        // Escape any double-quotes in the expander name
+        String safeName = String(hw.expanders[i].name);
+        safeName.replace("\"", "&quot;");
+        expandersJson += "{\"name\":\""; expandersJson += safeName; expandersJson += "\"";
+        expandersJson += ",\"chipType\":"; expandersJson += hw.expanders[i].chipType;
+        expandersJson += ",\"maxChan\":"; expandersJson += (hw.expanders[i].chipType == EXPANDER_TYPE_PCF8575 ? 15 : 7);
+        expandersJson += ",\"addr\":\""; expandersJson += hexBuf; expandersJson += "\"}";
+    }
+    expandersJson += "]";
+    page = replaceToken(page, "{expanders_json}", expandersJson);
+
+    // ── Pump section ─────────────────────────────────────────────────────────
+    page = replaceToken(page, "{pumpCount}", String(hw.relayCount));
     String pumpRowsHtml;
     for (int i = 0; i < hw.relayCount; i++) {
-        pumpRowsHtml += buildPumpRowHtml(i, hw.pumps[i]);
+        pumpRowsHtml += buildPumpRowHtml(i, hw.pumps[i], hw);
     }
     page = replaceToken(page, "{pump_rows_html}", pumpRowsHtml);
     g_server->send(200, "text/html; charset=UTF-8", page);
@@ -354,6 +431,24 @@ static void handleSaveHardware() {
         return;
     }
     HardwareConfig newHw;
+
+    // ── Parse expanders (optional hardware) first ─────────────────────────────
+    newHw.expanderCount = constrain(
+        g_server->hasArg("expCount") ? g_server->arg("expCount").toInt() : 0,
+        0, MAX_EXPANDER_COUNT);
+    for (int i = 0; i < MAX_EXPANDER_COUNT; i++) {
+        ExpanderEntry& e = newHw.expanders[i];
+        if (i < newHw.expanderCount) {
+            char key[24];
+            snprintf(key, sizeof(key), "ex%d_enabled", i); e.enabled    = g_server->hasArg(key);
+            snprintf(key, sizeof(key), "ex%d_type", i);    e.chipType   = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 1);
+            snprintf(key, sizeof(key), "ex%d_addr", i);    e.i2cAddress = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0x20, 0x20, 0x27);
+            snprintf(key, sizeof(key), "ex%d_name", i);
+            if (g_server->hasArg(key)) strlcpy(e.name, g_server->arg(key).c_str(), sizeof(e.name));
+        }
+    }
+
+    // ── Parse pumps ───────────────────────────────────────────────────────────
     newHw.relayCount = constrain(
         g_server->hasArg("pumpCount") ? g_server->arg("pumpCount").toInt() : 0,
         0, MAX_RELAY_COUNT);
@@ -363,13 +458,13 @@ static void handleSaveHardware() {
         // Elements beyond relayCount keep their default-initialized (disabled) state.
         if (i < newHw.relayCount) {
             char key[24];
-            snprintf(key, sizeof(key), "p%d_enabled", i);    p.enabled       = g_server->hasArg(key);
-            snprintf(key, sizeof(key), "p%d_type", i);       p.outputType    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 1);
-            snprintf(key, sizeof(key), "p%d_pin", i);        p.pin           = g_server->hasArg(key) ? g_server->arg(key).toInt() : -1;
-            snprintf(key, sizeof(key), "p%d_i2cAddr", i);    p.i2cAddress    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0x20, 0x20, 0x3F);
-            snprintf(key, sizeof(key), "p%d_i2cChan", i);    p.i2cChannel    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 15);
-            snprintf(key, sizeof(key), "p%d_invert", i);     p.invertLogic   = g_server->hasArg(key);
-            snprintf(key, sizeof(key), "p%d_maxRuntime", i); p.maxRuntimeSec = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 1, 3600) : 300;
+            snprintf(key, sizeof(key), "p%d_enabled", i);   p.enabled       = g_server->hasArg(key);
+            snprintf(key, sizeof(key), "p%d_type", i);      p.outputType    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 1);
+            snprintf(key, sizeof(key), "p%d_pin", i);       p.pin           = g_server->hasArg(key) ? g_server->arg(key).toInt() : -1;
+            snprintf(key, sizeof(key), "p%d_expander", i);  p.expanderIndex = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, MAX_EXPANDER_COUNT - 1);
+            snprintf(key, sizeof(key), "p%d_i2cChan", i);   p.i2cChannel    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 15);
+            snprintf(key, sizeof(key), "p%d_invert", i);    p.invertLogic   = g_server->hasArg(key);
+            snprintf(key, sizeof(key), "p%d_maxRuntime", i);p.maxRuntimeSec = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 1, 3600) : 300;
             snprintf(key, sizeof(key), "p%d_name", i);
             if (g_server->hasArg(key)) strlcpy(p.name, g_server->arg(key).c_str(), sizeof(p.name));
             snprintf(key, sizeof(key), "p%d_notes", i);
@@ -408,23 +503,64 @@ static void handleSaveHardware() {
             return;
         }
     }
-    // Validate: check for duplicate PCF8574 address+channel combinations
+    // Validate: check for duplicate I2C addresses among expanders
+    for (int i = 0; i < newHw.expanderCount; i++) {
+        if (!newHw.expanders[i].enabled) continue;
+        for (int j = i + 1; j < newHw.expanderCount; j++) {
+            if (!newHw.expanders[j].enabled) continue;
+            if (newHw.expanders[i].i2cAddress == newHw.expanders[j].i2cAddress) {
+                String page = buildPage(HTML_ERROR_PAGE);
+                page = replaceToken(page, "{error_msg}",
+                    "Doppelte I2C-Adresse 0x" + String(newHw.expanders[i].i2cAddress, HEX) +
+                    " bei Expander " + String(i + 1) + " und Expander " + String(j + 1) + ".");
+                page = replaceToken(page, "{back_url}", "/config_hardware");
+                g_server->send(400, "text/html; charset=UTF-8", page);
+                return;
+            }
+        }
+    }
+    // Validate: check for duplicate expander+channel combinations across pumps
     for (int i = 0; i < newHw.relayCount; i++) {
         const PumpEntry& pi = newHw.pumps[i];
         if (!pi.enabled || pi.outputType != OUTPUT_TYPE_PCF8574) continue;
         for (int j = i + 1; j < newHw.relayCount; j++) {
             const PumpEntry& pj = newHw.pumps[j];
             if (!pj.enabled || pj.outputType != OUTPUT_TYPE_PCF8574) continue;
-            if (pi.i2cAddress == pj.i2cAddress && pi.i2cChannel == pj.i2cChannel) {
+            if (pi.expanderIndex == pj.expanderIndex && pi.i2cChannel == pj.i2cChannel) {
                 String page = buildPage(HTML_ERROR_PAGE);
                 page = replaceToken(page, "{error_msg}",
-                    "Doppelte I2C-Belegung: PCF8574 Adresse 0x" +
-                    String(pi.i2cAddress, HEX) + " Kanal " + String(pi.i2cChannel) +
+                    "Doppelte I2C-Kanal-Belegung: Expander " + String(pi.expanderIndex + 1) +
+                    " Kanal " + String(pi.i2cChannel) +
                     " ist Pumpe " + String(i + 1) + " und Pumpe " + String(j + 1) + " zugewiesen.");
                 page = replaceToken(page, "{back_url}", "/config_hardware");
                 g_server->send(400, "text/html; charset=UTF-8", page);
                 return;
             }
+        }
+    }
+    // Validate: PCF pump's expanderIndex must be within configured expander count
+    for (int i = 0; i < newHw.relayCount; i++) {
+        const PumpEntry& p = newHw.pumps[i];
+        if (!p.enabled || p.outputType != OUTPUT_TYPE_PCF8574) continue;
+        if (p.expanderIndex >= (uint8_t)newHw.expanderCount) {
+            String page = buildPage(HTML_ERROR_PAGE);
+            page = replaceToken(page, "{error_msg}",
+                "Pumpe " + String(i + 1) + " referenziert Expander " + String(p.expanderIndex + 1) +
+                ", aber es sind nur " + String(newHw.expanderCount) + " Expander konfiguriert.");
+            page = replaceToken(page, "{back_url}", "/config_hardware");
+            g_server->send(400, "text/html; charset=UTF-8", page);
+            return;
+        }
+        // Validate channel range against chip type
+        uint8_t maxChan = (newHw.expanders[p.expanderIndex].chipType == EXPANDER_TYPE_PCF8575) ? 15 : 7;
+        if (p.i2cChannel > maxChan) {
+            String page = buildPage(HTML_ERROR_PAGE);
+            page = replaceToken(page, "{error_msg}",
+                "Pumpe " + String(i + 1) + ": Kanal " + String(p.i2cChannel) +
+                " ist zu gross f&#252;r den gew&#228;hlten Expander (max. " + String(maxChan) + ").");
+            page = replaceToken(page, "{back_url}", "/config_hardware");
+            g_server->send(400, "text/html; charset=UTF-8", page);
+            return;
         }
     }
 

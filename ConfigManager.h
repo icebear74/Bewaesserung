@@ -2,14 +2,16 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-#define MAX_RELAY_COUNT 8
+#define MAX_RELAY_COUNT    8
+#define MAX_EXPANDER_COUNT 4
 
 // Output types for pump entries
 #define OUTPUT_TYPE_GPIO    0   // Direct GPIO pin
 #define OUTPUT_TYPE_PCF8574 1   // PCF8574 / PCF8575 I2C GPIO expander
 
-// Convenience alias kept for backward compatibility
-#define OUTPUT_TYPE_I2C OUTPUT_TYPE_PCF8574
+// I2C expander chip types
+#define EXPANDER_TYPE_PCF8574 0   // PCF8574: 8 ports  (addresses 0x20–0x27)
+#define EXPANDER_TYPE_PCF8575 1   // PCF8575: 16 ports (addresses 0x20–0x27)
 
 struct DeviceConfig {
     char hostname[32]    = "Bewaesserung";
@@ -22,23 +24,33 @@ struct DeviceConfig {
     char locationName[64]= "";
 };
 
+// Optional hardware: one I2C GPIO-expander chip entry
+struct ExpanderEntry {
+    bool    enabled    = false;
+    char    name[32]   = "";
+    uint8_t chipType   = EXPANDER_TYPE_PCF8574;  // 0 = PCF8574 (8 p), 1 = PCF8575 (16 p)
+    uint8_t i2cAddress = 0x20;
+};
+
 // Per-pump configuration entry
 struct PumpEntry {
-    bool    enabled         = false;
-    char    name[32]        = "";
-    uint8_t outputType      = OUTPUT_TYPE_GPIO;
-    int     pin             = -1;           // GPIO pin (OUTPUT_TYPE_GPIO only)
-    uint8_t i2cAddress      = 0x20;        // I2C address (OUTPUT_TYPE_PCF8574 only)
-    uint8_t i2cChannel      = 0;           // Pin/channel on expander (0-7 PCF8574, 0-15 PCF8575)
-    bool    invertLogic     = false;        // active-low per pump
-    int     maxRuntimeSec   = 300;          // max runtime / test timeout
-    char    notes[64]       = "";
+    bool    enabled        = false;
+    char    name[32]       = "";
+    uint8_t outputType     = OUTPUT_TYPE_GPIO;
+    int     pin            = -1;   // GPIO pin number (OUTPUT_TYPE_GPIO only)
+    uint8_t expanderIndex  = 0;    // Index into HardwareConfig.expanders[] (OUTPUT_TYPE_PCF8574 only)
+    uint8_t i2cChannel     = 0;    // Channel on expander (0-7 PCF8574, 0-15 PCF8575)
+    bool    invertLogic    = false; // active-low per pump
+    int     maxRuntimeSec  = 300;   // max runtime / test timeout
+    char    notes[64]      = "";
 };
 
 struct HardwareConfig {
-    int       relayCount            = 0;
-    PumpEntry pumps[MAX_RELAY_COUNT];
-    bool      relayInverted         = false;  // legacy global invert flag (kept for backward compat)
+    int           relayCount    = 0;
+    PumpEntry     pumps[MAX_RELAY_COUNT];
+    int           expanderCount = 0;
+    ExpanderEntry expanders[MAX_EXPANDER_COUNT];
+    bool          relayInverted = false;  // legacy global invert flag (kept for backward compat)
 };
 
 struct WateringEntry {

@@ -1,34 +1,18 @@
 #include "RelayManager.h"
 
 RelayManager::RelayManager() {
-    memset(_pcfAddresses, 0, sizeof(_pcfAddresses));
     memset(_pcfOk, false, sizeof(_pcfOk));
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
-int RelayManager::findPcf(uint8_t address) const {
-    for (int d = 0; d < _pcfCount; d++) {
-        if (_pcfAddresses[d] == address) return d;
-    }
-    return -1;
-}
-
-int RelayManager::findOrAddPcf(uint8_t address) {
-    int idx = findPcf(address);
-    if (idx >= 0) return idx;
-    if (_pcfCount >= MAX_PCF8574_DEVICES) {
-        Serial.printf("[Relay] findOrAddPcf: device pool full (max %d devices).\n", MAX_PCF8574_DEVICES);
-        return -1;
-    }
-    _pcfAddresses[_pcfCount] = address;
-    return _pcfCount++;
-}
-
 bool RelayManager::isPumpValid(const PumpEntry& p) const {
     if (!p.enabled) return false;
-    if (p.outputType == OUTPUT_TYPE_GPIO)    return p.pin >= 0;
-    if (p.outputType == OUTPUT_TYPE_PCF8574) return true;
+    if (p.outputType == OUTPUT_TYPE_GPIO) return p.pin >= 0;
+    if (p.outputType == OUTPUT_TYPE_PCF8574) {
+        if (p.expanderIndex >= (uint8_t)_config.expanderCount) return false;
+        return _config.expanders[p.expanderIndex].enabled && _pcfOk[p.expanderIndex];
+    }
     return false;
 }
 
@@ -42,36 +26,49 @@ void RelayManager::begin(HardwareConfig& config) {
         _testOffAt[i] = 0;
     }
 
-    // ── GPIO pins: configure direction and set safe (off) state ──────────────
+    // ── GPIO pins ─────────────────────────────────────────────────────────────
+    // Pre-set the output register to the safe (off) level BEFORE enabling the
+    // pin as OUTPUT.  On ESP32, digitalWrite() before pinMode(OUTPUT) pre-charges
+    // the output latch, so active-low relays (invertLogic=true) never glitch ON
+    // during initialisation.
     for (int i = 0; i < _config.relayCount; i++) {
         const PumpEntry& p = _config.pumps[i];
         if (!p.enabled || p.outputType != OUTPUT_TYPE_GPIO || p.pin < 0) continue;
+        bool offLevel = p.invertLogic || _config.relayInverted;
+        digitalWrite(p.pin, offLevel ? HIGH : LOW);
         pinMode(p.pin, OUTPUT);
-        writeRelay(i, false);
     }
 
-    // ── PCF8574 devices: collect unique addresses, then initialize ────────────
-    _pcfCount = 0;
-    memset(_pcfAddresses, 0, sizeof(_pcfAddresses));
+    // ── PCF8574 / PCF8575 expanders ───────────────────────────────────────────
+    // Each expander is indexed directly by its position in _config.expanders[].
     memset(_pcfOk, false, sizeof(_pcfOk));
-
-    for (int i = 0; i < _config.relayCount; i++) {
-        const PumpEntry& p = _config.pumps[i];
-        if (!p.enabled || p.outputType != OUTPUT_TYPE_PCF8574) continue;
-        findOrAddPcf(p.i2cAddress);
-    }
-    for (int d = 0; d < _pcfCount; d++) {
-        _pcfOk[d] = _pcfDevices[d].begin(_pcfAddresses[d]);
+    for (int d = 0; d < _config.expanderCount; d++) {
+        const ExpanderEntry& e = _config.expanders[d];
+        if (!e.enabled) continue;
+        _pcfOk[d] = _pcfDevices[d].begin(e.i2cAddress);
         if (_pcfOk[d]) {
-            Serial.printf("[Relay] PCF8574 at 0x%02X initialized.\n", _pcfAddresses[d]);
+            const char* typeName = (e.chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575" : "PCF8574";
+            Serial.printf("[Relay] %s \"%s\" (0x%02X) initialized.\n",
+                          typeName, e.name, e.i2cAddress);
+            // Immediately write the safe (off) level to every pump on this expander.
+            // This minimises the window during which PCF8574 pins sit at their
+            // power-on HIGH state and could briefly activate a non-inverted relay.
+            for (int i = 0; i < _config.relayCount; i++) {
+                const PumpEntry& p = _config.pumps[i];
+                if (p.enabled && p.outputType == OUTPUT_TYPE_PCF8574 &&
+                    p.expanderIndex == (uint8_t)d) {
+                    writeRelay(i, false);
+                }
+            }
         } else {
-            Serial.printf("[Relay] PCF8574 at 0x%02X NOT found on I2C bus!\n", _pcfAddresses[d]);
+            Serial.printf("[Relay] \"%s\" (0x%02X) NOT found on I2C bus!\n",
+                          e.name, e.i2cAddress);
         }
     }
 
-    allOff();  // Ensure all outputs are in safe (off) state
-    Serial.printf("[Relay] Initialized %d pump(s), %d PCF8574 device(s).\n",
-                  _config.relayCount, _pcfCount);
+    allOff();  // Final safe-state pass for all outputs
+    Serial.printf("[Relay] Initialized %d pump(s), %d expander(s).\n",
+                  _config.relayCount, _config.expanderCount);
 }
 
 bool RelayManager::activateRelay(int index, bool armed) {
@@ -97,7 +94,8 @@ bool RelayManager::activateRelay(int index, bool armed) {
     if (p.outputType == OUTPUT_TYPE_GPIO) {
         Serial.printf("[Relay] Relay %d (GPIO %d) ON\n", index, p.pin);
     } else {
-        Serial.printf("[Relay] Relay %d (PCF8574 0x%02X ch%d) ON\n", index, p.i2cAddress, p.i2cChannel);
+        const char* expName = _config.expanders[p.expanderIndex].name;
+        Serial.printf("[Relay] Relay %d (\"%s\" ch%d) ON\n", index, expName, p.i2cChannel);
     }
     return true;
 }
@@ -111,7 +109,8 @@ bool RelayManager::deactivateRelay(int index) {
     if (p.outputType == OUTPUT_TYPE_GPIO) {
         Serial.printf("[Relay] Relay %d (GPIO %d) OFF\n", index, p.pin);
     } else {
-        Serial.printf("[Relay] Relay %d (PCF8574 0x%02X ch%d) OFF\n", index, p.i2cAddress, p.i2cChannel);
+        const char* expName = _config.expanders[p.expanderIndex].name;
+        Serial.printf("[Relay] Relay %d (\"%s\" ch%d) OFF\n", index, expName, p.i2cChannel);
     }
     return true;
 }
@@ -151,10 +150,12 @@ bool RelayManager::testActivateRelay(int index) {
     int timeout = (p.maxRuntimeSec > 0) ? p.maxRuntimeSec : 30;
     _testOffAt[index] = millis() + ((unsigned long)timeout * 1000UL);
     if (p.outputType == OUTPUT_TYPE_GPIO) {
-        Serial.printf("[Relay] TEST pump %d (GPIO %d) ON – auto-off in %ds\n", index, p.pin, timeout);
+        Serial.printf("[Relay] TEST pump %d (GPIO %d) ON – auto-off in %ds\n",
+                      index, p.pin, timeout);
     } else {
-        Serial.printf("[Relay] TEST pump %d (PCF8574 0x%02X ch%d) ON – auto-off in %ds\n",
-                      index, p.i2cAddress, p.i2cChannel, timeout);
+        const char* expName = _config.expanders[p.expanderIndex].name;
+        Serial.printf("[Relay] TEST pump %d (\"%s\" ch%d) ON – auto-off in %ds\n",
+                      index, expName, p.i2cChannel, timeout);
     }
     return true;
 }
@@ -172,7 +173,9 @@ bool RelayManager::testDeactivateRelay(int index) {
     if (p.outputType == OUTPUT_TYPE_GPIO) {
         Serial.printf("[Relay] TEST pump %d (GPIO %d) OFF\n", index, p.pin);
     } else {
-        Serial.printf("[Relay] TEST pump %d (PCF8574 0x%02X ch%d) OFF\n", index, p.i2cAddress, p.i2cChannel);
+        const char* expName = _config.expanders[p.expanderIndex].name;
+        Serial.printf("[Relay] TEST pump %d (\"%s\" ch%d) OFF\n",
+                      index, expName, p.i2cChannel);
     }
     return true;
 }
@@ -207,11 +210,11 @@ void RelayManager::writeRelay(int index, bool on) {
         if (p.pin < 0) return;
         digitalWrite(p.pin, level ? HIGH : LOW);
     } else if (p.outputType == OUTPUT_TYPE_PCF8574) {
-        int devIdx = findPcf(p.i2cAddress);
-        if (devIdx < 0 || !_pcfOk[devIdx]) {
-            Serial.printf("[Relay] writeRelay: PCF8574 at 0x%02X not available.\n", p.i2cAddress);
+        uint8_t di = p.expanderIndex;
+        if (di >= MAX_EXPANDER_COUNT || !_pcfOk[di]) {
+            Serial.printf("[Relay] writeRelay: expander %d not available.\n", di);
             return;
         }
-        _pcfDevices[devIdx].digitalWrite(p.i2cChannel, level);
+        _pcfDevices[di].digitalWrite(p.i2cChannel, level);
     }
 }

@@ -229,38 +229,125 @@ document.getElementById('locSearch').addEventListener('keydown', function(e){
 )rawhtml";
 
 // ─── Hardware Config Page ─────────────────────────────────────────────────────
-// Tokens: {pumpCount} {pump_rows_html}
+// Tokens: {expanderCount} {expander_rows_html} {expanders_json} {pumpCount} {pump_rows_html}
 
 const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#9881;&#65039; Hardware-Konfiguration</h1>
   <div class="alert-info">
-    &#128161; &#196;nderungen werden sofort &#252;bernommen (kein Neustart erforderlich). Test-Buttons aktivieren die Pumpe kurzzeitig.
+    &#128161; &#196;nderungen werden sofort &#252;bernommen (kein Neustart erforderlich).
+    Test-Buttons aktivieren die Pumpe kurzzeitig.
   </div>
   <form method="POST" action="/save_hardware" id="hwForm">
-    <label for="pumpCount">Anzahl Pumpen (0-8)</label>
-    <input type="number" id="pumpCount" name="pumpCount" value="{pumpCount}" min="0" max="8" onchange="rebuildPumps(this.value)">
+
+    <h2 style="margin-top:18px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
+      &#128268; Optionale Hardware (I2C Expander)
+    </h2>
+    <div class="alert-info" style="margin-bottom:8px">
+      Hier werden I2C GPIO-Expander-Chips definiert (PCF8574 / PCF8575).
+      Pumpen k&#246;nnen einen dieser Expander als Ausgangstyp verwenden.
+    </div>
+    <label for="expCount">Anzahl Expander (0&#x2013;4)</label>
+    <input type="number" id="expCount" name="expCount" value="{expanderCount}"
+           min="0" max="4" onchange="rebuildExpanders(this.value)">
+    <div id="expanderRows">{expander_rows_html}</div>
+
+    <h2 style="margin-top:22px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
+      &#128167; Pumpen
+    </h2>
+    <label for="pumpCount">Anzahl Pumpen (0&#x2013;8)</label>
+    <input type="number" id="pumpCount" name="pumpCount" value="{pumpCount}"
+           min="0" max="8" onchange="rebuildPumps(this.value)">
     <div id="pumpRows">{pump_rows_html}</div>
+
     <div style="margin-top:14px">
       <button class="btn" type="submit">&#128190; Speichern</button>
     </div>
   </form>
 </div>
 <script>
+var _exp={expanders_json};
+function _expLabel(e){return e.name+' ('+e.addr+', '+(e.chipType===1?'PCF8575':'PCF8574')+')';}
+function _expOptions(selIdx){
+  if(!_exp.length) return '<option value="0" disabled>&#x26A0; Kein Expander – zuerst oben anlegen</option>';
+  var s='';
+  for(var i=0;i<_exp.length;i++){
+    s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+_expLabel(_exp[i])+'</option>';
+  }
+  return s;
+}
 function toggleOutType(i,v){
   document.getElementById('gpio'+i).style.display=v==='0'?'block':'none';
   document.getElementById('i2c'+i).style.display=v==='1'?'block':'none';
 }
+function onExpanderChange(pumpIdx,sel){
+  var idx=parseInt(sel.value)||0;
+  var maxChan=(_exp[idx]&&_exp[idx].chipType===1)?15:7;
+  var ch=document.getElementById('chan'+pumpIdx);
+  if(ch){ch.max=maxChan;ch.placeholder='0-'+maxChan;}
+}
+// ── Expander rows ──────────────────────────────────────────────────────────────
+function mkExpanderRow(i,d){
+  d=d||{};
+  var e=d.enabled!==false?'checked':'';
+  var nm=d.name||'';
+  var t0=d.chipType===0?'selected':''; var t1=d.chipType===1?'selected':'';
+  var addr=d.addr!=null?d.addr:32;
+  return '<div class="pump-entry" style="border:1px solid #cce0ff;padding:10px;margin-bottom:8px;border-radius:4px;background:#f5f9ff">'
+  +'<b>Expander '+(i+1)+'</b>'
+  +'<div class="form-row" style="margin-top:6px">'
+  +'<div class="form-col"><label><input type="checkbox" name="ex'+i+'_enabled" '+e+'> Aktiv</label></div>'
+  +'<div class="form-col"><label>Name</label><input type="text" name="ex'+i+'_name" value="'+nm+'" maxlength="31"></div>'
+  +'</div><div class="form-row">'
+  +'<div class="form-col"><label>Chiptyp</label><select name="ex'+i+'_type">'
+  +'<option value="0" '+t0+'>PCF8574 (8 Ports, 0x20&#x2013;0x27)</option>'
+  +'<option value="1" '+t1+'>PCF8575 (16 Ports, 0x20&#x2013;0x27)</option>'
+  +'</select></div>'
+  +'<div class="form-col"><label>I2C-Adresse (dez., 32=0x20 &#x2026; 39=0x27)</label>'
+  +'<input type="number" name="ex'+i+'_addr" value="'+addr+'" min="32" max="39"></div>'
+  +'</div></div>';
+}
+function getVal(div,sel){var el=div.querySelector(sel);return el?el.value:'';}
+function getChk(div,sel){var el=div.querySelector(sel);return el?el.checked:false;}
+function rebuildExpanders(n){
+  n=parseInt(n)||0;
+  var div=document.getElementById('expanderRows');
+  var html='';
+  for(var i=0;i<n;i++){
+    var nmEl=div.querySelector('[name="ex'+i+'_name"]');
+    if(nmEl){
+      html+=mkExpanderRow(i,{
+        enabled:getChk(div,'[name="ex'+i+'_enabled"]'),
+        name:getVal(div,'[name="ex'+i+'_name"]'),
+        chipType:parseInt(getVal(div,'[name="ex'+i+'_type"]')||'0'),
+        addr:parseInt(getVal(div,'[name="ex'+i+'_addr"]')||'32')
+      });
+    }else{
+      html+=mkExpanderRow(i,{enabled:true,addr:32});
+    }
+  }
+  div.innerHTML=html;
+  // Keep _exp in sync so pump dropdowns rebuild correctly
+  _exp=[];
+  for(var j=0;j<n;j++){
+    var nd=document.getElementById('expanderRows');
+    var ct=parseInt(getVal(nd,'[name="ex'+j+'_type"]')||'0');
+    _exp.push({name:getVal(nd,'[name="ex'+j+'_name"]'),chipType:ct,
+               maxChan:ct===1?15:7,addr:'0x'+('0'+parseInt(getVal(nd,'[name="ex'+j+'_addr"]')||'32').toString(16)).slice(-2).toUpperCase()});
+  }
+}
+// ── Pump rows ──────────────────────────────────────────────────────────────────
 function mkRow(i,d){
   d=d||{};
   var e=d.enabled!==false?'checked':'';
   var inv=d.invertLogic?'checked':'';
   var t=d.outputType||0;
-  var t0=t===0?'selected':'';var t1=t===1?'selected':'';
-  var nm=d.name||'';var nt=d.notes||'';
-  var pin=d.pin!=null?d.pin:-1;var mr=d.maxRuntimeSec||300;
-  var addr=d.i2cAddress!=null?d.i2cAddress:32;
+  var t0=t===0?'selected':''; var t1=t===1?'selected':'';
+  var nm=d.name||''; var nt=d.notes||'';
+  var pin=d.pin!=null?d.pin:-1; var mr=d.maxRuntimeSec||300;
+  var expIdx=d.expanderIndex||0;
   var chan=d.i2cChannel!=null?d.i2cChannel:0;
+  var maxChan=(_exp[expIdx]&&_exp[expIdx].chipType===1)?15:7;
   var gpioDisp=t===0?'block':'none';
   var i2cDisp=t===1?'block':'none';
   return '<div class="pump-entry" style="border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px">'
@@ -270,23 +357,23 @@ function mkRow(i,d){
   +'<div class="form-col"><label>Name</label><input type="text" name="p'+i+'_name" value="'+nm+'" maxlength="31"></div>'
   +'</div><div class="form-row">'
   +'<div class="form-col"><label>Ausgangstyp</label><select name="p'+i+'_type" onchange="toggleOutType('+i+',this.value)">'
-  +'<option value="0" '+t0+'>GPIO-Pin</option>'
-  +'<option value="1" '+t1+'>PCF8574 / PCF8575 (I2C)</option>'
+  +'<option value="0" '+t0+'>Direkt-GPIO</option>'
+  +'<option value="1" '+t1+'>I2C Expander (PCF8574/8575)</option>'
   +'</select></div></div>'
   +'<div id="gpio'+i+'" style="display:'+gpioDisp+'">'
   +'<div class="form-row"><div class="form-col"><label>GPIO-Pin (-1 = inaktiv)</label>'
   +'<input type="number" name="p'+i+'_pin" value="'+pin+'" min="-1" max="39"></div></div></div>'
   +'<div id="i2c'+i+'" style="display:'+i2cDisp+'">'
   +'<div class="form-row">'
-  +'<div class="form-col"><label>I2C-Adresse (dezimal, z.B. 32=0x20)</label>'
-  +'<input type="number" name="p'+i+'_i2cAddr" value="'+addr+'" min="32" max="63" placeholder="32"></div>'
-  +'<div class="form-col"><label>Kanal / Pin (0-15)</label>'
-  +'<input type="number" name="p'+i+'_i2cChan" value="'+chan+'" min="0" max="15"></div>'
+  +'<div class="form-col"><label>Expander</label>'
+  +'<select name="p'+i+'_expander" onchange="onExpanderChange('+i+',this)">'+_expOptions(expIdx)+'</select></div>'
+  +'<div class="form-col"><label>Kanal (0&#x2013;'+maxChan+')</label>'
+  +'<input type="number" name="p'+i+'_i2cChan" id="chan'+i+'" value="'+chan+'" min="0" max="'+maxChan+'"></div>'
   +'</div></div>'
   +'<div class="form-row" style="margin-top:4px">'
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_invert" '+inv+'> Aktiv-LOW (invertiert)</label></div>'
-  +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label><input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div>'
-  +'</div>'
+  +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label>'
+  +'<input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div></div>'
   +'<label>Notizen</label><input type="text" name="p'+i+'_notes" value="'+nt+'" maxlength="63">'
   +'<div style="margin-top:8px">'
   +'<button type="button" onclick="testRelay('+i+',\'on\')" style="margin-right:4px;padding:5px 14px;background:#1a6b3c;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9654; Test EIN</button>'
@@ -294,8 +381,6 @@ function mkRow(i,d){
   +' <span id="ts'+i+'" style="font-size:12px;color:#555"></span>'
   +'</div></div>';
 }
-function getVal(div,sel){var el=div.querySelector(sel);return el?el.value:'';}
-function getChk(div,sel){var el=div.querySelector(sel);return el?el.checked:false;}
 function rebuildPumps(n){
   n=parseInt(n)||0;
   var div=document.getElementById('pumpRows');
@@ -309,7 +394,7 @@ function rebuildPumps(n){
         name:getVal(div,'[name="p'+i+'_name"]'),
         outputType:t,
         pin:parseInt(getVal(div,'[name="p'+i+'_pin"]')||'-1'),
-        i2cAddress:parseInt(getVal(div,'[name="p'+i+'_i2cAddr"]')||'32'),
+        expanderIndex:parseInt(getVal(div,'[name="p'+i+'_expander"]')||'0'),
         i2cChannel:parseInt(getVal(div,'[name="p'+i+'_i2cChan"]')||'0'),
         invertLogic:getChk(div,'[name="p'+i+'_invert"]'),
         maxRuntimeSec:parseInt(getVal(div,'[name="p'+i+'_maxRuntime"]')||'300'),
