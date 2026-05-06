@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <WiFi.h>
-#include "core/ConfigManager.h"
+#include "ConfigManager.h"
 
 #define WPS_TIMEOUT_MS      60000UL
 #define CONNECT_TIMEOUT_MS  10000UL

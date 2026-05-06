@@ -23,7 +23,7 @@ bool Ds3231Manager::begin() {
     return true;
 }
 
-DateTime Ds3231Manager::getTime() const {
+DateTime Ds3231Manager::getTime() {
     return _rtc.now();
 }
 
@@ -63,12 +63,12 @@ void Ds3231Manager::applyToSystemClock() {
                   now.hour(), now.minute(), now.second());
 }
 
-float Ds3231Manager::getTemperature() const {
+float Ds3231Manager::getTemperature() {
     if (!_present) return 0.0f;
     return _rtc.getTemperature();
 }
 
-bool Ds3231Manager::isRunning() const {
+bool Ds3231Manager::isRunning() {
     if (!_present) return false;
     return !_rtc.lostPower();
 }

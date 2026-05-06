@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include <Wire.h>
-#include "core/StateManager.h"
+#include "StateManager.h"
 
 class OledStatus {
 public:
