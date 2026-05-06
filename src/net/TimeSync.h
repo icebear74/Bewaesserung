@@ -50,8 +50,6 @@ public:
     void   setTimezone(const char* tz);
 
 private:
-    bool syncNTP();
-
     WiFiUDP              _udp;
     NTPClient*           _ntpClient      = nullptr;
     GeneralTimeConverter* _timeConverter  = nullptr;

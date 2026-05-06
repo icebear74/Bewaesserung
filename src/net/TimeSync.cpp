@@ -192,6 +192,10 @@ void TimeSync::begin(DeviceConfig& config, Ds3231Manager* ds3231) {
     Serial.printf("[Time] Timezone: %s  stdOffset: %ds\n",
                   config.timezone, _timeConverter->getStdOffsetSec());
 
+    // Set system timezone so localtime() works everywhere
+    setenv("TZ", config.timezone, 1);
+    tzset();
+
     _ntpClient = new NTPClient(_udp, _ntpServer, 0, NTP_UPDATE_INTERVAL_MS);
     _ntpClient->begin();
 
@@ -267,8 +271,9 @@ time_t TimeSync::getLocalTime() const {
 }
 
 String TimeSync::getLocalTimeString() const {
-    time_t local = getLocalTime();
-    struct tm* t = gmtime(&local);
+    time_t utc = getUtcTime();
+    struct tm t_buf;
+    struct tm* t = localtime_r(&utc, &t_buf);
     char buf[16];
     snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
     return String(buf);
@@ -277,6 +282,8 @@ String TimeSync::getLocalTimeString() const {
 void TimeSync::setTimezone(const char* tz) {
     if (_timeConverter) {
         _timeConverter->setTimezone(tz);
+        setenv("TZ", tz, 1);
+        tzset();
         Serial.printf("[Time] Timezone updated: %s\n", tz);
     }
 }

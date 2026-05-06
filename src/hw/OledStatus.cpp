@@ -161,10 +161,11 @@ void OledStatus::update(SystemState state, const String& ip, const String& apSSI
             break;
         case SystemState::RUNNING:
         case SystemState::RUNNING_OFFLINE: {
-            // Time from system clock
+            // Time from system clock – use localtime_r() which respects the TZ set by TimeSync
             time_t now_t;
             time(&now_t);
-            struct tm* tm_info = gmtime(&now_t);
+            struct tm tm_buf;
+            struct tm* tm_info = localtime_r(&now_t, &tm_buf);
             char tbuf[12];
             snprintf(tbuf, sizeof(tbuf), "%02d:%02d:%02d",
                      tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);

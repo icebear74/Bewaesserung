@@ -30,7 +30,7 @@ input[type=checkbox]{width:auto;margin-right:8px}
 .btn{display:inline-block;padding:10px 22px;background:#1a6b3c;color:#fff;
   border:none;border-radius:4px;font-size:15px;cursor:pointer;text-decoration:none}
 .btn:hover{background:#145530}
-.btn-danger{background:#dc3545}
+.btn-danger{background:#dc3545}  /* reserved for destructive actions (Phase 2: delete schedule) */
 .btn-danger:hover{background:#b02a37}
 .alert-danger{background:#dc3545;color:#fff;padding:12px;border-radius:4px;margin-bottom:16px;font-weight:bold}
 .alert-warning{background:#ffc107;color:#333;padding:12px;border-radius:4px;margin-bottom:16px;font-weight:bold}

@@ -142,11 +142,12 @@ static void handleStatus() {
     if (ts && ts->isSynced()) {
         timeStr = ts->getLocalTimeString();
     } else {
-        // Fallback to system clock
+        // Fallback to system clock – use localtime_r() which respects the TZ set by TimeSync
         time_t now_t;
         time(&now_t);
         if (now_t > 1000000L) {
-            struct tm* t = gmtime(&now_t);
+            struct tm t_buf;
+            struct tm* t = localtime_r(&now_t, &t_buf);
             char buf[20];
             snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
             timeStr = String(buf);

@@ -5,6 +5,9 @@
 
 // WPS config for Push-Button mode
 static esp_wps_config_t wps_config = WPS_CONFIG_INIT_DEFAULT(WPS_TYPE_PBC);
+// File-scope WPS state flags (safe for use inside WiFi event callbacks)
+static volatile bool s_wpsSuccess = false;
+static volatile bool s_wpsDone    = false;
 
 WifiManager::WifiManager() {}
 
@@ -136,23 +139,24 @@ bool WifiManager::tryWPS() {
 
     Serial.println("[WiFi] Starting WPS (PBC mode). Press the WPS button on your router...");
 
-    volatile bool wpsSuccess = false;
-    volatile bool wpsDone    = false;
+    // Reset file-scope flags (static storage – safe to reference from event callbacks)
+    s_wpsSuccess = false;
+    s_wpsDone    = false;
 
-    WiFi.onEvent([&](arduino_event_id_t event, arduino_event_info_t /*info*/) {
+    WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t /*info*/) {
         switch (event) {
             case ARDUINO_EVENT_WPS_ER_SUCCESS:
                 Serial.println("[WiFi] WPS success!");
-                wpsSuccess = true;
-                wpsDone    = true;
+                s_wpsSuccess = true;
+                s_wpsDone    = true;
                 break;
             case ARDUINO_EVENT_WPS_ER_FAILED:
                 Serial.println("[WiFi] WPS failed.");
-                wpsDone = true;
+                s_wpsDone = true;
                 break;
             case ARDUINO_EVENT_WPS_ER_TIMEOUT:
                 Serial.println("[WiFi] WPS timeout.");
-                wpsDone = true;
+                s_wpsDone = true;
                 break;
             default:
                 break;
@@ -163,14 +167,14 @@ bool WifiManager::tryWPS() {
     esp_wifi_wps_start(0);
 
     unsigned long start = millis();
-    while (!wpsDone && (millis() - start) < WPS_TIMEOUT_MS) {
+    while (!s_wpsDone && (millis() - start) < WPS_TIMEOUT_MS) {
         delay(100);
         yield();
     }
 
     esp_wifi_wps_disable();
 
-    if (wpsSuccess) {
+    if (s_wpsSuccess) {
         unsigned long t2 = millis();
         while (WiFi.status() != WL_CONNECTED && (millis() - t2) < 10000UL) {
             delay(200);
