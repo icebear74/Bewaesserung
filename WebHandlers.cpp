@@ -10,6 +10,7 @@
 #include "RelayManager.h"
 #include <WebServer.h>
 #include <WiFi.h>
+#include <ArduinoJson.h>
 
 // ─── Module-level state ───────────────────────────────────────────────────────
 
@@ -430,14 +431,12 @@ static void handleRelayTest() {
         msg = "Unbekannte Aktion";
     }
 
-    // Build JSON manually to avoid extra library overhead
-    String json = "{\"ok\":";
-    json += ok ? "true" : "false";
-    json += ",\"msg\":\"";
-    // Escape double quotes in msg (simple)
-    msg.replace("\"", "\\\"");
-    json += msg;
-    json += "\"}";
+    // Use ArduinoJson for correct escaping of all JSON special characters
+    JsonDocument respDoc;
+    respDoc["ok"]  = ok;
+    respDoc["msg"] = msg;
+    String json;
+    serializeJson(respDoc, json);
     g_server->send(200, "application/json", json);
     Serial.printf("[Web] POST /relay_test relay=%d action=%s ok=%d\n", relay, act.c_str(), ok);
 }
@@ -540,14 +539,16 @@ static void handleSaveWatering() {
     WateringConfig& wc  = cfg->getWateringConfig();
     wc.count = 0;
 
-    // Scan all possible indices; collect entries where relay field is present
+    // Scan all possible indices; collect entries where relay field is present.
+    // Use 4x MAX_WATERING_ENTRIES to accommodate indices from deleted+re-added
+    // entries (JS nextIdx only ever increments, gaps from deletions leave holes).
     for (int n = 0; n < MAX_WATERING_ENTRIES * 4 && wc.count < MAX_WATERING_ENTRIES; n++) {
         char key[20];
         snprintf(key, sizeof(key), "e%d_relay", n);
         if (!g_server->hasArg(key)) continue;
 
         WateringEntry& e = wc.entries[wc.count++];
-        e.relay = constrain(g_server->arg(key).toInt(), 0, max(hw.relayCount - 1, 0));
+        e.relay = constrain(g_server->arg(key).toInt(), 0, std::max(hw.relayCount - 1, 0));
 
         // Parse time field (HH:MM)
         snprintf(key, sizeof(key), "e%d_time", n);

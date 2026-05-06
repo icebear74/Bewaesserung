@@ -195,7 +195,7 @@ function searchLocation(){
   if(!q) return;
   var st = document.getElementById('searchStatus');
   st.textContent = 'Suche...';
-  fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(q)+'&format=json&limit=1&accept-language=de')
+  fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(q)+'&format=json&limit=1&accept-language=de&email=esp32-irrigation@device')
   .then(function(r){return r.json();})
   .then(function(data){
     if(data && data.length > 0){
@@ -203,19 +203,21 @@ function searchLocation(){
       var lon = parseFloat(data[0].lon);
       document.getElementById('latitude').value = lat.toFixed(6);
       document.getElementById('longitude').value = lon.toFixed(6);
+      var displayName = data[0].name || (data[0].display_name||'').split(',')[0];
       if(!document.getElementById('locationName').value)
-        document.getElementById('locationName').value = (data[0].display_name||'').split(',')[0];
+        document.getElementById('locationName').value = displayName;
       marker.setLatLng([lat,lon]);
       map.setView([lat,lon],13);
-      st.textContent = '&#10003; Gefunden: ' + (data[0].display_name||'');
+      // Use textContent to safely display potentially untrusted API data
+      st.textContent = '\u2713 Gefunden: ' + (data[0].display_name||'');
       st.style.color = '#1a6b3c';
     } else {
-      st.textContent = '&#10007; Ort nicht gefunden.';
+      st.textContent = '\u2717 Ort nicht gefunden.';
       st.style.color = '#dc3545';
     }
   })
   .catch(function(){
-    st.textContent = '&#10007; Suche fehlgeschlagen (Internetverbindung pr&#252;fen).';
+    st.textContent = '\u2717 Suche fehlgeschlagen (Internetverbindung pr\u00fcfen).';
     st.style.color = '#dc3545';
   });
 }

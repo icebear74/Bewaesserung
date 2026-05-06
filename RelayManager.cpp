@@ -95,7 +95,7 @@ bool RelayManager::testActivateRelay(int index) {
     writeRelay(index, true);
     _relayState[index] = true;
     int timeout = (p.maxRuntimeSec > 0) ? p.maxRuntimeSec : 30;
-    _testOffAt[index] = millis() + (unsigned long)timeout * 1000UL;
+    _testOffAt[index] = millis() + ((unsigned long)timeout * 1000UL);
     Serial.printf("[Relay] TEST pump %d (pin %d) ON – auto-off in %ds\n", index, p.pin, timeout);
     return true;
 }
@@ -117,7 +117,8 @@ bool RelayManager::testDeactivateRelay(int index) {
 void RelayManager::update() {
     unsigned long now = millis();
     for (int i = 0; i < _config.relayCount; i++) {
-        if (_testOffAt[i] > 0 && now >= _testOffAt[i]) {
+        // Use unsigned subtraction for correct wraparound behaviour (~49-day cycle)
+        if (_testOffAt[i] != 0 && (now - _testOffAt[i]) < 0x80000000UL) {
             writeRelay(i, false);
             _relayState[i] = false;
             _testOffAt[i]  = 0;
