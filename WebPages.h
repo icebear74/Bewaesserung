@@ -144,9 +144,14 @@ const char HTML_LOCATION_PAGE[] PROGMEM = R"rawhtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <div class="card">
-  <h1>📍 Standort</h1>
+  <h1>&#128205; Standort</h1>
+  <div style="display:flex;gap:8px;margin-bottom:14px">
+    <input type="text" id="locSearch" placeholder="Ort suchen (z.B. M&#252;nchen, Balkon 12. Str.)" style="flex:1;margin:0">
+    <button type="button" class="btn" onclick="searchLocation()" style="white-space:nowrap">&#128269; Suchen</button>
+  </div>
+  <div id="searchStatus" style="font-size:13px;color:#666;margin-bottom:8px"></div>
   <form method="POST" action="/save_location" id="locForm">
-    <label>Standort auf Karte auswählen (Marker verschieben)</label>
+    <label>Standort auf Karte w&#228;hlen (Marker verschieben oder Karte anklicken)</label>
     <div id="map"></div>
     <div class="form-row">
       <div class="form-col">
@@ -154,25 +159,26 @@ const char HTML_LOCATION_PAGE[] PROGMEM = R"rawhtml(
         <input type="number" id="latitude" name="latitude" value="{latitude}" step="0.0001" min="-90" max="90">
       </div>
       <div class="form-col">
-        <label for="longitude">Längengrad</label>
+        <label for="longitude">L&#228;ngengrad</label>
         <input type="number" id="longitude" name="longitude" value="{longitude}" step="0.0001" min="-180" max="180">
       </div>
     </div>
     <label for="locationName">Ortsname (optional)</label>
-    <input type="text" id="locationName" name="locationName" value="{locationName}" placeholder="z.B. Garten München" maxlength="63">
+    <input type="text" id="locationName" name="locationName" value="{locationName}" placeholder="z.B. Garten M&#252;nchen" maxlength="63">
     <div style="margin-top:8px">
-      <button class="btn" type="submit">💾 Speichern</button>
+      <button class="btn" type="submit">&#128190; Speichern</button>
     </div>
   </form>
 </div>
 <script>
+var map, marker;
 (function(){
   var lat = parseFloat(document.getElementById('latitude').value) || 48.1351;
   var lng = parseFloat(document.getElementById('longitude').value) || 11.5820;
-  var map = L.map('map').setView([lat, lng], 13);
+  map = L.map('map').setView([lat, lng], 13);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    attribution:'© OpenStreetMap',maxZoom:19}).addTo(map);
-  var marker = L.marker([lat,lng],{draggable:true}).addTo(map);
+    attribution:'&#169; OpenStreetMap',maxZoom:19}).addTo(map);
+  marker = L.marker([lat,lng],{draggable:true}).addTo(map);
   marker.on('dragend',function(e){
     var pos = e.target.getLatLng();
     document.getElementById('latitude').value = pos.lat.toFixed(6);
@@ -184,62 +190,187 @@ const char HTML_LOCATION_PAGE[] PROGMEM = R"rawhtml(
     document.getElementById('longitude').value = e.latlng.lng.toFixed(6);
   });
 })();
+function searchLocation(){
+  var q = document.getElementById('locSearch').value.trim();
+  if(!q) return;
+  var st = document.getElementById('searchStatus');
+  st.textContent = 'Suche...';
+  fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(q)+'&format=json&limit=1&accept-language=de')
+  .then(function(r){return r.json();})
+  .then(function(data){
+    if(data && data.length > 0){
+      var lat = parseFloat(data[0].lat);
+      var lon = parseFloat(data[0].lon);
+      document.getElementById('latitude').value = lat.toFixed(6);
+      document.getElementById('longitude').value = lon.toFixed(6);
+      if(!document.getElementById('locationName').value)
+        document.getElementById('locationName').value = (data[0].display_name||'').split(',')[0];
+      marker.setLatLng([lat,lon]);
+      map.setView([lat,lon],13);
+      st.textContent = '&#10003; Gefunden: ' + (data[0].display_name||'');
+      st.style.color = '#1a6b3c';
+    } else {
+      st.textContent = '&#10007; Ort nicht gefunden.';
+      st.style.color = '#dc3545';
+    }
+  })
+  .catch(function(){
+    st.textContent = '&#10007; Suche fehlgeschlagen (Internetverbindung pr&#252;fen).';
+    st.style.color = '#dc3545';
+  });
+}
+document.getElementById('locSearch').addEventListener('keydown', function(e){
+  if(e.key==='Enter'){e.preventDefault();searchLocation();}
+});
 </script>
 )rawhtml";
 
 // ─── Hardware Config Page ─────────────────────────────────────────────────────
+// Tokens: {pumpCount} {pump_rows_html}
 
 const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
-  <h1>⚙️ Hardware-Konfiguration</h1>
-  <div class="alert-warning">
-    ⚠️ Änderungen an der Relay-Konfiguration erfordern einen Neustart.
+  <h1>&#9881;&#65039; Hardware-Konfiguration</h1>
+  <div class="alert-info">
+    &#128161; &#196;nderungen werden sofort &#252;bernommen (kein Neustart erforderlich). Test-Buttons aktivieren die Pumpe kurzzeitig.
   </div>
-  <form method="POST" action="/save_hardware">
-    <label for="relayCount">Anzahl Relais (0-8)</label>
-    <input type="number" id="relayCount" name="relayCount" value="{relayCount}" min="0" max="8" onchange="updatePins()">
-    <div id="pinConfig">
-      {relay_pins_html}
-    </div>
-    <label style="display:flex;align-items:center;margin-bottom:14px">
-      <input type="checkbox" id="relayInverted" name="relayInverted" {relay_inverted_checked}>
-      Relais aktiv LOW (invertiert, typisch für Relaismodule mit IN-Pin)
-    </label>
-    <div style="margin-top:8px">
-      <button class="btn" type="submit">💾 Speichern &amp; Neu starten</button>
+  <form method="POST" action="/save_hardware" id="hwForm">
+    <label for="pumpCount">Anzahl Pumpen (0-8)</label>
+    <input type="number" id="pumpCount" name="pumpCount" value="{pumpCount}" min="0" max="8" onchange="rebuildPumps(this.value)">
+    <div id="pumpRows">{pump_rows_html}</div>
+    <div style="margin-top:14px">
+      <button class="btn" type="submit">&#128190; Speichern</button>
     </div>
   </form>
 </div>
 <script>
-function updatePins(){
-  var count = parseInt(document.getElementById('relayCount').value)||0;
-  var div = document.getElementById('pinConfig');
-  var html = '';
-  for(var i=0;i<count;i++){
-    var existing = div.querySelector('[name="pin'+i+'"]');
-    var val = existing ? existing.value : '-1';
-    html += '<label>Relais '+(i+1)+' GPIO-Pin</label>';
-    html += '<input type="number" name="pin'+i+'" value="'+val+'" min="-1" max="39" placeholder="-1 = nicht belegt">';
+function mkRow(i,d){
+  d=d||{};
+  var e=d.enabled!==false?'checked':'';
+  var inv=d.invertLogic?'checked':'';
+  var t0=d.outputType===0?'selected':'';
+  var t1=d.outputType===1?'selected':'';
+  var nm=d.name||'';var nt=d.notes||'';
+  var pin=d.pin!=null?d.pin:-1;var mr=d.maxRuntimeSec||300;
+  return '<div class="pump-entry" style="border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px">'
+  +'<b>Pumpe '+(i+1)+'</b>'
+  +'<div class="form-row" style="margin-top:6px">'
+  +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_enabled" '+e+'> Aktiv</label></div>'
+  +'<div class="form-col"><label>Name</label><input type="text" name="p'+i+'_name" value="'+nm+'" maxlength="31"></div>'
+  +'</div><div class="form-row">'
+  +'<div class="form-col"><label>Ausgangstyp</label><select name="p'+i+'_type">'
+  +'<option value="0" '+t0+'>GPIO-Pin</option>'
+  +'<option value="1" '+t1+'>I2C (zuk&#252;nftig)</option>'
+  +'</select></div>'
+  +'<div class="form-col"><label>GPIO-Pin (-1=inaktiv)</label><input type="number" name="p'+i+'_pin" value="'+pin+'" min="-1" max="39"></div>'
+  +'</div><div class="form-row">'
+  +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_invert" '+inv+'> Aktiv-LOW (invertiert)</label></div>'
+  +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label><input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div>'
+  +'</div>'
+  +'<label>Notizen</label><input type="text" name="p'+i+'_notes" value="'+nt+'" maxlength="63">'
+  +'<div style="margin-top:8px">'
+  +'<button type="button" onclick="testRelay('+i+',\'on\')" style="margin-right:4px;padding:5px 14px;background:#1a6b3c;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9654; Test EIN</button>'
+  +'<button type="button" onclick="testRelay('+i+',\'off\')" style="padding:5px 14px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9646; Test AUS</button>'
+  +' <span id="ts'+i+'" style="font-size:12px;color:#555"></span>'
+  +'</div></div>';
+}
+function getVal(div,sel){var el=div.querySelector(sel);return el?el.value:'';}
+function getChk(div,sel){var el=div.querySelector(sel);return el?el.checked:false;}
+function rebuildPumps(n){
+  n=parseInt(n)||0;
+  var div=document.getElementById('pumpRows');
+  var html='';
+  for(var i=0;i<n;i++){
+    var pinEl=div.querySelector('[name="p'+i+'_pin"]');
+    if(pinEl){
+      html+=mkRow(i,{
+        enabled:getChk(div,'[name="p'+i+'_enabled"]'),
+        name:getVal(div,'[name="p'+i+'_name"]'),
+        outputType:parseInt(getVal(div,'[name="p'+i+'_type"]')||'0'),
+        pin:parseInt(pinEl.value),
+        invertLogic:getChk(div,'[name="p'+i+'_invert"]'),
+        maxRuntimeSec:parseInt(getVal(div,'[name="p'+i+'_maxRuntime"]')||'300'),
+        notes:getVal(div,'[name="p'+i+'_notes"]')
+      });
+    }else{
+      html+=mkRow(i,{pin:-1,maxRuntimeSec:300,enabled:true});
+    }
   }
-  div.innerHTML = html;
+  div.innerHTML=html;
+}
+function testRelay(idx,action){
+  var sp=document.getElementById('ts'+idx);
+  sp.textContent='...';
+  fetch('/relay_test',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'relay='+idx+'&action='+action})
+  .then(function(r){return r.json();})
+  .then(function(d){sp.textContent=d.msg;sp.style.color=d.ok?'#1a6b3c':'#dc3545';})
+  .catch(function(){sp.textContent='Verbindungsfehler';sp.style.color='#dc3545';});
 }
 </script>
 )rawhtml";
 
-// ─── Watering Config Page (Phase 2 placeholder) ───────────────────────────────
+// ─── Watering Config Page ─────────────────────────────────────────────────────
+// Tokens: {watering_status} {relayCount} {relay_names_json} {nextIdx} {entry_rows_html}
 
 const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
-  <h1>💧 Bewässerungsplan</h1>
-  <div class="alert-info">
-    ℹ️ Die vollständige Bewässerungskonfiguration wird in Phase 2 implementiert.
-  </div>
-  <p style="color:#666;margin-top:12px">
-    Hier werden Sie Bewässerungspläne für jedes Relais einrichten können, 
-    einschließlich Wochentage, Startzeit und Dauer.
-  </p>
+  <h1>&#128167; Bew&#228;sserungsplan</h1>
   {watering_status}
+  <form method="POST" action="/save_watering" id="wf">
+    <div id="entries">{entry_rows_html}</div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button type="button" class="btn" onclick="addEntry()" style="background:#17a2b8">+ Eintrag hinzuf&#252;gen</button>
+      <button class="btn" type="submit">&#128190; Speichern</button>
+    </div>
+  </form>
 </div>
+<script>
+var relayCount={relayCount};
+var relayNames={relay_names_json};
+var nextIdx={nextIdx};
+var dayL=['Mo','Di','Mi','Do','Fr','Sa','So'];
+function pad(n){return n<10?'0'+n:''+n;}
+function daysHtml(days,i){
+  var s='';
+  for(var d=0;d<7;d++){
+    var c=(days&(1<<d))?'checked':'';
+    s+='<label style="margin-right:7px"><input type="checkbox" name="e'+i+'_d'+d+'" '+c+'> '+dayL[d]+'</label>';
+  }
+  return s;
+}
+function relayOpts(sel){
+  var s='';
+  for(var r=0;r<relayCount;r++){
+    s+='<option value="'+r+'"'+(sel===r?' selected':'')+'>'+(relayNames[r]||'Pumpe '+(r+1))+'</option>';
+  }
+  return s;
+}
+function mkEntry(i,d){
+  d=d||{};
+  var days=d.days!=null?d.days:0x7F;
+  var ac=d.active!==false?'checked':'';
+  var t=pad(d.hour||6)+':'+pad(d.minute||0);
+  return '<div class="pump-entry" id="e'+i+'" style="border:1px solid #ddd;padding:10px;margin-bottom:8px;border-radius:4px">'
+  +'<div class="form-row">'
+  +'<div class="form-col"><label>Pumpe</label><select name="e'+i+'_relay">'+relayOpts(d.relay||0)+'</select></div>'
+  +'<div class="form-col"><label>Startzeit</label><input type="time" name="e'+i+'_time" value="'+t+'"></div>'
+  +'<div class="form-col"><label>Dauer (s)</label><input type="number" name="e'+i+'_duration" value="'+(d.durationSec||120)+'" min="1" max="7200"></div>'
+  +'</div>'
+  +'<div style="margin-top:6px">'+daysHtml(days,i)+'</div>'
+  +'<div style="margin-top:6px">'
+  +'<label><input type="checkbox" name="e'+i+'_active" '+ac+'> Aktiv</label>'
+  +' <button type="button" onclick="delEntry('+i+')" style="margin-left:12px;padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button>'
+  +'</div></div>';
+}
+function addEntry(){
+  if(relayCount===0){alert('Bitte zuerst Pumpen in der Hardware-Konfiguration anlegen.');return;}
+  document.getElementById('entries').insertAdjacentHTML('beforeend',mkEntry(nextIdx++,{}));
+}
+function delEntry(id){
+  var el=document.getElementById('e'+id);
+  if(el)el.remove();
+}
+</script>
 )rawhtml";
 
 // ─── DS3231 Warning HTML ──────────────────────────────────────────────────────
@@ -264,25 +395,36 @@ const char HTML_WATERING_LOCKED_WARNING[] PROGMEM = R"rawhtml(
 
 const char HTML_404_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
-  <h1>404 – Seite nicht gefunden</h1>
+  <h1>404 &#8211; Seite nicht gefunden</h1>
   <p>Die angeforderte Seite existiert nicht.</p>
   <a class="btn" href="/" style="margin-top:12px">Zur Startseite</a>
 </div>
 )rawhtml";
 
-// ─── Save Confirmation Page ───────────────────────────────────────────────────
+// ─── Error Page ───────────────────────────────────────────────────────────────
+// Tokens: {error_msg} {back_url}
+
+const char HTML_ERROR_PAGE[] PROGMEM = R"rawhtml(
+<div class="card">
+  <h1>&#10007; Fehler</h1>
+  <div class="alert-danger">{error_msg}</div>
+  <a class="btn" href="{back_url}" style="margin-top:12px">&#8592; Zur&#252;ck</a>
+</div>
+)rawhtml";
+
+// ─── Save Confirmation Pages ──────────────────────────────────────────────────
 
 const char HTML_SAVED_RESTART[] PROGMEM = R"rawhtml(
 <div class="card">
-  <h1>✅ Gespeichert</h1>
-  <p>Konfiguration gespeichert. Das Gerät startet in Kürze neu...</p>
+  <h1>&#10003; Gespeichert</h1>
+  <p>Konfiguration gespeichert. Das Ger&#228;t startet in K&#252;rze neu...</p>
   <script>setTimeout(function(){window.location='/';},5000);</script>
 </div>
 )rawhtml";
 
 const char HTML_SAVED_LIVE[] PROGMEM = R"rawhtml(
 <div class="card">
-  <h1>✅ Gespeichert</h1>
+  <h1>&#10003; Gespeichert</h1>
   <p>Konfiguration gespeichert und sofort angewendet.</p>
   <a class="btn" href="/status" style="margin-top:12px">Zum Status</a>
 </div>

@@ -77,13 +77,43 @@ bool ConfigManager::loadHardwareConfig() {
         Serial.printf("[Config] /hardware.json parse error: %s\n", err.c_str());
         return false;
     }
-    _hardwareConfig.relayCount   = doc["relayCount"]   | 0;
+    _hardwareConfig.relayCount    = doc["relayCount"]    | 0;
     _hardwareConfig.relayInverted = doc["relayInverted"] | false;
-    JsonArray pins = doc["relayPins"].as<JsonArray>();
-    for (int i = 0; i < MAX_RELAY_COUNT; i++) {
-        _hardwareConfig.relayPins[i] = (i < (int)pins.size()) ? (int)pins[i] : -1;
+
+    if (doc["pumps"].is<JsonArray>()) {
+        // New format: per-pump entries
+        JsonArray pumps = doc["pumps"].as<JsonArray>();
+        for (int i = 0; i < MAX_RELAY_COUNT; i++) {
+            PumpEntry& p = _hardwareConfig.pumps[i];
+            p = PumpEntry{};  // reset to defaults
+            if (i < (int)pumps.size()) {
+                JsonObject po = pumps[i].as<JsonObject>();
+                p.enabled       = po["enabled"]       | false;
+                p.outputType    = po["outputType"]    | (uint8_t)OUTPUT_TYPE_GPIO;
+                p.pin           = po["pin"]           | -1;
+                p.invertLogic   = po["invertLogic"]   | false;
+                p.maxRuntimeSec = po["maxRuntimeSec"] | 300;
+                strlcpy(p.name,  po["name"]  | "", sizeof(p.name));
+                strlcpy(p.notes, po["notes"] | "", sizeof(p.notes));
+            }
+        }
+        Serial.printf("[Config] Hardware config loaded (new format): %d pumps.\n", _hardwareConfig.relayCount);
+    } else if (doc["relayPins"].is<JsonArray>()) {
+        // Old format: migrate relayPins[] to pumps[]
+        JsonArray pins = doc["relayPins"].as<JsonArray>();
+        for (int i = 0; i < MAX_RELAY_COUNT; i++) {
+            PumpEntry& p = _hardwareConfig.pumps[i];
+            p = PumpEntry{};
+            int pin = (i < (int)pins.size()) ? (int)pins[i] : -1;
+            p.pin         = pin;
+            p.enabled     = (pin >= 0) && (i < _hardwareConfig.relayCount);
+            p.invertLogic = _hardwareConfig.relayInverted;
+            char nameBuf[32];
+            snprintf(nameBuf, sizeof(nameBuf), "Pumpe %d", i + 1);
+            strlcpy(p.name, nameBuf, sizeof(p.name));
+        }
+        Serial.printf("[Config] Hardware config loaded (legacy format, migrated): %d relays.\n", _hardwareConfig.relayCount);
     }
-    Serial.printf("[Config] Hardware config loaded: %d relays.\n", _hardwareConfig.relayCount);
     return true;
 }
 
@@ -96,9 +126,17 @@ bool ConfigManager::saveHardwareConfig() {
     JsonDocument doc;
     doc["relayCount"]    = _hardwareConfig.relayCount;
     doc["relayInverted"] = _hardwareConfig.relayInverted;
-    JsonArray pins = doc["relayPins"].to<JsonArray>();
+    JsonArray pumps = doc["pumps"].to<JsonArray>();
     for (int i = 0; i < MAX_RELAY_COUNT; i++) {
-        pins.add(_hardwareConfig.relayPins[i]);
+        const PumpEntry& p = _hardwareConfig.pumps[i];
+        JsonObject po = pumps.add<JsonObject>();
+        po["enabled"]       = p.enabled;
+        po["name"]          = p.name;
+        po["outputType"]    = p.outputType;
+        po["pin"]           = p.pin;
+        po["invertLogic"]   = p.invertLogic;
+        po["maxRuntimeSec"] = p.maxRuntimeSec;
+        po["notes"]         = p.notes;
     }
     serializeJson(doc, f);
     f.close();

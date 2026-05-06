@@ -4,6 +4,10 @@
 
 #define MAX_RELAY_COUNT 8
 
+// Output types for pump entries
+#define OUTPUT_TYPE_GPIO 0   // Direct GPIO pin
+#define OUTPUT_TYPE_I2C  1   // I2C port expander (future)
+
 struct DeviceConfig {
     char hostname[32]    = "Bewaesserung";
     char ssid[64]        = "";
@@ -15,10 +19,21 @@ struct DeviceConfig {
     char locationName[64]= "";
 };
 
+// Per-pump configuration entry
+struct PumpEntry {
+    bool    enabled       = false;
+    char    name[32]      = "";
+    uint8_t outputType    = OUTPUT_TYPE_GPIO;
+    int     pin           = -1;
+    bool    invertLogic   = false;   // active-low per pump
+    int     maxRuntimeSec = 300;     // max runtime / test timeout
+    char    notes[64]     = "";
+};
+
 struct HardwareConfig {
-    int relayCount                   = 0;
-    int relayPins[MAX_RELAY_COUNT]   = {-1,-1,-1,-1,-1,-1,-1,-1};
-    bool relayInverted               = false;  // true = active low
+    int       relayCount            = 0;
+    PumpEntry pumps[MAX_RELAY_COUNT];
+    bool      relayInverted         = false;  // legacy global invert flag (kept for backward compat)
 };
 
 struct WateringEntry {
