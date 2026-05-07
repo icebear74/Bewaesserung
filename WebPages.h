@@ -273,7 +273,7 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
     </h2>
     <input type="hidden" id="pumpCount" name="pumpCount" value="{pumpCount}">
     <div id="pumpRows">{pump_rows_html}</div>
-    <div id="noPumpsMsg" style="display:{noPumpsMsg}color:#999;font-style:italic;margin-bottom:8px">
+    <div id="noPumpsMsg" style="display:{noPumpsMsg};color:#999;font-style:italic;margin-bottom:8px">
       Noch keine Pumpe angelegt. Pumpe hinzuf&#252;gen &#8594;
     </div>
     <button type="button" class="btn" onclick="addPump()"
@@ -444,7 +444,7 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
     <input type="hidden" id="slotCount" name="slotCount" value="{slotCount}">
     <div id="slots">{slot_rows_html}</div>
-    <div id="noSlotsMsg" style="display:{noSlotsMsg}color:#999;font-style:italic;margin-bottom:8px">
+    <div id="noSlotsMsg" style="display:{noSlotsMsg};color:#999;font-style:italic;margin-bottom:8px">
       Noch kein Slot angelegt. Slot hinzuf&#252;gen &#8594;
     </div>
     <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
@@ -480,8 +480,8 @@ function addSlot(){
 function deleteSlot(si){
   var el=document.getElementById('slot'+si);
   if(el)el.remove();
-  // Recount visible slot divs (children of #slots container)
-  var remaining=document.getElementById('slots').querySelectorAll('.pump-entry');
+  // Recount visible slot divs inside the #slots container
+  var remaining=document.getElementById('slots').querySelectorAll('[id^="slot"]');
   document.getElementById('slotCount').value=remaining.length;
   if(remaining.length===0)document.getElementById('noSlotsMsg').style.display='block';
 }
@@ -506,6 +506,7 @@ function deleteAssign(si,ai){
 }
 function mkSlot(si,d){
   d=d||{};
+  var si1=si+1; // pre-compute slot display number (avoids ambiguous string concat in oninput)
   var nm=d.name||('Slot '+(si+1));
   var en=d.enabled!==false?'checked':'';
   var tr=d.triggerType||0;
@@ -527,11 +528,11 @@ function mkSlot(si,d){
   var offDisp=(tr===4)?'flex':'none';
   return '<div class="pump-entry" id="slot'+si+'" style="border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-    +'<b style="font-size:1.05em">&#128337; '+(si+1)+' &ndash; '+nm+'</b>'
+    +'<b style="font-size:1.05em">&#128337; '+si1+' &ndash; '+nm+'</b>'
     +'<button type="button" onclick="deleteSlot('+si+')" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div>'
     +'<div class="form-row">'
     +'<div class="form-col"><label><input type="checkbox" name="s'+si+'_enabled" '+en+'> Aktiv</label></div>'
-    +'<div class="form-col"><label>Name</label><input type="text" name="s'+si+'_name" value="'+nm+'" maxlength="31" oninput="this.closest(\'.pump-entry\').querySelector(\'b\').textContent=\'\u23F1 \'+('+si+'+1)+\' \u2013 \'+this.value" required></div>'
+    +'<div class="form-col"><label>Name</label><input type="text" name="s'+si+'_name" value="'+nm+'" maxlength="31" oninput="this.closest(\'.pump-entry\').querySelector(\'b\').textContent=\'\u23F1 '+si1+' \u2013 \'+this.value" required></div>'
     +'</div>'
     +'<div class="form-row">'
     +'<div class="form-col"><label>Ausl&ouml;ser</label><select name="s'+si+'_trigger" onchange="onTriggerChange('+si+',this.value)">'+trOpts+'</select></div>'

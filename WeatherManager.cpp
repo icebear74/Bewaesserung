@@ -41,7 +41,7 @@ bool WeatherManager::fetchNow() {
 
     HTTPClient http;
     http.begin(url);
-    http.setTimeout(10000);
+    http.setTimeout(WEATHER_HTTP_TIMEOUT_MS);
     int code = http.GET();
     if (code != 200) {
         Serial.printf("[Weather] HTTP error %d from Open-Meteo.\n", code);

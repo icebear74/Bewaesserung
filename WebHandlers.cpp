@@ -535,7 +535,7 @@ static void handleConfigHardware() {
     page = replaceToken(page, "{pump_rows_html}", pumpRowsHtml);
     // Show "no pumps" message when there are no pumps configured
     page = replaceToken(page, "{noPumpsMsg}",
-        hw.relayCount == 0 ? "block;" : "none;");
+        hw.relayCount == 0 ? "block" : "none");
     g_server->send(200, "text/html; charset=UTF-8", page);
     Serial.println("[Web] GET /config_hardware");
 }
@@ -566,9 +566,12 @@ static void handleSaveHardware() {
     // ── Parse pumps ───────────────────────────────────────────────────────────
     // pumpCount holds the highest allocated pump index (from JS _nextPumpIdx).
     // Deleted pumps have no form fields; we skip gaps by checking for p{i}_name presence.
+    // We scan up to PUMP_SCAN_FACTOR times the maximum pump count to safely handle
+    // sessions with many repeated add/delete cycles (JS never resets _nextPumpIdx).
+    static const int PUMP_SCAN_FACTOR = 8;
     int pumpScanLimit = constrain(
         g_server->hasArg("pumpCount") ? g_server->arg("pumpCount").toInt() : 0,
-        0, MAX_RELAY_COUNT * 8);  // scan up to 8x in case of many add/delete cycles
+        0, MAX_RELAY_COUNT * PUMP_SCAN_FACTOR);
 
     newHw.relayCount = 0;
     for (int i = 0; i < pumpScanLimit && newHw.relayCount < MAX_RELAY_COUNT; i++) {
@@ -914,7 +917,7 @@ static void handleConfigWatering() {
         slotRowsHtml += buildSlotRowHtml(i, sc.slots[i], sc, hw);
     }
     page = replaceToken(page, "{slot_rows_html}", slotRowsHtml);
-    page = replaceToken(page, "{noSlotsMsg}", sc.slotCount == 0 ? "block;" : "none;");
+    page = replaceToken(page, "{noSlotsMsg}", sc.slotCount == 0 ? "block" : "none");
 
     g_server->send(200, "text/html; charset=UTF-8", page);
     Serial.println("[Web] GET /config_watering");

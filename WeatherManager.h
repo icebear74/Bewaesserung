@@ -8,6 +8,9 @@
 // Data is considered stale after 2 hours without a successful fetch
 #define WEATHER_STALE_THRESHOLD_MS (7200000UL)
 
+// HTTP fetch timeout
+#define WEATHER_HTTP_TIMEOUT_MS (10000)
+
 class WeatherManager {
 public:
     WeatherManager();
