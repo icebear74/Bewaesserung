@@ -64,7 +64,11 @@ void RelayManager::begin(HardwareConfig& config) {
     for (int d = 0; d < _config.expanderCount; d++) {
         const ExpanderEntry& e = _config.expanders[d];
         if (!e.enabled) continue;
-        _pcfDevices[d] = new Adafruit_PCF8574();
+        _pcfDevices[d] = new (std::nothrow) Adafruit_PCF8574();
+        if (!_pcfDevices[d]) {
+            Serial.printf("[Relay] ERROR: out of memory allocating PCF device %d\n", d);
+            continue;
+        }
         _pcfOk[d] = _pcfDevices[d]->begin(e.i2cAddress);
         if (_pcfOk[d]) {
             const char* typeName = (e.chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575" : "PCF8574";
