@@ -20,6 +20,8 @@ bool RelayManager::isPumpValid(const PumpEntry& p) const {
 
 void RelayManager::begin(HardwareConfig& config) {
     _config = config;
+    _config.relayCount    = constrain(_config.relayCount, 0, MAX_RELAY_COUNT);
+    _config.expanderCount = constrain(_config.expanderCount, 0, MAX_EXPANDER_COUNT);
 
     // Cancel any pending test timeouts on reload
     for (int i = 0; i < MAX_RELAY_COUNT; i++) {

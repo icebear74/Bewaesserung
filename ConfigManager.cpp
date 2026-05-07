@@ -77,7 +77,7 @@ bool ConfigManager::loadHardwareConfig() {
         Serial.printf("[Config] /hardware.json parse error: %s\n", err.c_str());
         return false;
     }
-    _hardwareConfig.relayCount    = doc["relayCount"]    | 0;
+    _hardwareConfig.relayCount    = constrain((int)(doc["relayCount"] | 0), 0, MAX_RELAY_COUNT);
     _hardwareConfig.relayInverted = doc["relayInverted"] | false;
 
     // ── Load optional hardware: expander chips ────────────────────────────────
