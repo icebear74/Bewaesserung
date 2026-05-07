@@ -124,13 +124,19 @@ bool RelayManager::setPumpOffLocked(int index, const char* reason) {
 
 void RelayManager::watchdogTaskEntry(void* arg) {
     RelayManager* self = static_cast<RelayManager*>(arg);
-    if (!self) vTaskDelete(nullptr);
+    if (!self) {
+        Serial.println("[Relay][Watchdog] ERROR: task started without RelayManager instance.");
+        vTaskDelete(nullptr);
+        return;
+    }
     self->watchdogLoop();
+    self->_watchdogTask = nullptr;
     vTaskDelete(nullptr);
 }
 
 void RelayManager::watchdogLoop() {
     const TickType_t delayTicks = pdMS_TO_TICKS(1000);
+    unsigned long lastLockWarnAt = 0;
     while (_watchdogRun) {
         if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
             for (int i = 0; i < _config.relayCount; i++) {
@@ -151,6 +157,12 @@ void RelayManager::watchdogLoop() {
                 }
             }
             xSemaphoreGive(_stateMutex);
+        } else {
+            unsigned long now = millis();
+            if (now - lastLockWarnAt > 5000UL) {
+                Serial.println("[Relay][Watchdog] WARN: state mutex busy, retrying.");
+                lastLockWarnAt = now;
+            }
         }
         vTaskDelay(delayTicks);
     }
@@ -189,22 +201,29 @@ void RelayManager::ensureWatchdogTask() {
 void RelayManager::stopWatchdogTask() {
     _watchdogRun = false;
     if (_watchdogTask) {
-        TaskHandle_t handle = _watchdogTask;
-        _watchdogTask = nullptr;
-        vTaskDelete(handle);
+        // Give the task a short window to leave its loop and self-delete.
+        for (int i = 0; i < 10 && _watchdogTask; i++) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        if (_watchdogTask) {
+            TaskHandle_t handle = _watchdogTask;
+            _watchdogTask = nullptr;
+            vTaskDelete(handle);
+        }
     }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 void RelayManager::begin(HardwareConfig& config) {
-    if (_stateMutex) xSemaphoreTake(_stateMutex, portMAX_DELAY);
+    stopWatchdogTask();
 
+    if (_stateMutex) xSemaphoreTake(_stateMutex, portMAX_DELAY);
     _config = config;
-    _config.relayCount    = constrain(_config.relayCount, 0, MAX_RELAY_COUNT);
+    _config.relayCount = constrain(_config.relayCount, 0, MAX_RELAY_COUNT);
     _config.expanderCount = constrain(_config.expanderCount, 0, MAX_EXPANDER_COUNT);
 
-    // Cancel any pending test timeouts on reload
+    // Reset runtime state snapshot and pending test deadlines.
     for (int i = 0; i < MAX_RELAY_COUNT; i++) {
         _testOffAt[i] = 0;
         _relayState[i] = false;
@@ -212,6 +231,7 @@ void RelayManager::begin(HardwareConfig& config) {
         _runtime[i].activeSlotIndex = -1;
         updatePumpStatusLocked(i, "idle");
     }
+    if (_stateMutex) xSemaphoreGive(_stateMutex);
 
     // ── GPIO pins ─────────────────────────────────────────────────────────────
     // Pre-set the output register to the safe (off) level BEFORE enabling the
@@ -265,6 +285,7 @@ void RelayManager::begin(HardwareConfig& config) {
     }
 
     // Final safe-state pass for all configured outputs
+    if (_stateMutex) xSemaphoreTake(_stateMutex, portMAX_DELAY);
     for (int i = 0; i < _config.relayCount; i++) {
         if (isPumpValid(_config.pumps[i])) {
             setPumpOffLocked(i, "init");
@@ -330,12 +351,13 @@ void RelayManager::allOff() {
 
 bool RelayManager::isActive(int index) const {
     if (index < 0 || index >= MAX_RELAY_COUNT) return false;
-    bool active = _relayState[index];
-    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        active = _relayState[index];
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        bool active = _relayState[index];
         xSemaphoreGive(_stateMutex);
+        return active;
     }
-    return active;
+    Serial.printf("[Relay] WARN: isActive(%d) could not lock state mutex.\n", index);
+    return false;
 }
 
 bool RelayManager::getPumpRuntimeInfo(int index, PumpRuntimeInfo& out) const {
