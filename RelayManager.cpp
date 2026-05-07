@@ -218,7 +218,10 @@ void RelayManager::stopWatchdogTask() {
 void RelayManager::begin(HardwareConfig& config) {
     stopWatchdogTask();
 
-    if (_stateMutex) xSemaphoreTake(_stateMutex, portMAX_DELAY);
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        Serial.println("[Relay] ERROR: begin() could not lock state mutex.");
+        return;
+    }
     _config = config;
     _config.relayCount = constrain(_config.relayCount, 0, MAX_RELAY_COUNT);
     _config.expanderCount = constrain(_config.expanderCount, 0, MAX_EXPANDER_COUNT);
@@ -285,7 +288,11 @@ void RelayManager::begin(HardwareConfig& config) {
     }
 
     // Final safe-state pass for all configured outputs
-    if (_stateMutex) xSemaphoreTake(_stateMutex, portMAX_DELAY);
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        Serial.println("[Relay] ERROR: begin() safe-state pass could not lock mutex.");
+        ensureWatchdogTask();
+        return;
+    }
     for (int i = 0; i < _config.relayCount; i++) {
         if (isPumpValid(_config.pumps[i])) {
             setPumpOffLocked(i, "init");
@@ -362,7 +369,7 @@ bool RelayManager::isActive(int index) const {
 
 bool RelayManager::getPumpRuntimeInfo(int index, PumpRuntimeInfo& out) const {
     if (index < 0 || index >= MAX_RELAY_COUNT) return false;
-    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
         out = _runtime[index];
         xSemaphoreGive(_stateMutex);
         return true;

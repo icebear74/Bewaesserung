@@ -67,7 +67,7 @@ private:
     // on library versions that call `delete i2c_dev` unconditionally).
     Adafruit_PCF8574* _pcfDevices[MAX_EXPANDER_COUNT];
     bool              _pcfOk[MAX_EXPANDER_COUNT];
-    SemaphoreHandle_t _stateMutex = nullptr;
+    mutable SemaphoreHandle_t _stateMutex = nullptr;
     TaskHandle_t      _watchdogTask = nullptr;
     bool              _watchdogRun = false;
 };
