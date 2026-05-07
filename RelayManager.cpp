@@ -8,6 +8,9 @@ RelayManager::RelayManager() {
     memset(_pcfOk,      0, sizeof(_pcfOk));
     memset(_runtime,    0, sizeof(_runtime));
     _stateMutex = xSemaphoreCreateMutex();
+    if (!_stateMutex) {
+        Serial.println("[Relay] ERROR: failed to create state mutex.");
+    }
 }
 
 RelayManager::~RelayManager() {
@@ -290,7 +293,6 @@ void RelayManager::begin(HardwareConfig& config) {
     // Final safe-state pass for all configured outputs
     if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         Serial.println("[Relay] ERROR: begin() safe-state pass could not lock mutex.");
-        ensureWatchdogTask();
         return;
     }
     for (int i = 0; i < _config.relayCount; i++) {
@@ -358,13 +360,14 @@ void RelayManager::allOff() {
 
 bool RelayManager::isActive(int index) const {
     if (index < 0 || index >= MAX_RELAY_COUNT) return false;
+    bool active = _relayState[index];
     if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-        bool active = _relayState[index];
+        active = _relayState[index];
         xSemaphoreGive(_stateMutex);
-        return active;
+    } else {
+        Serial.printf("[Relay] WARN: isActive(%d) using cached state (mutex busy).\n", index);
     }
-    Serial.printf("[Relay] WARN: isActive(%d) could not lock state mutex.\n", index);
-    return false;
+    return active;
 }
 
 bool RelayManager::getPumpRuntimeInfo(int index, PumpRuntimeInfo& out) const {
