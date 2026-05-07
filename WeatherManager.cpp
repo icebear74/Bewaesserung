@@ -1,6 +1,7 @@
 #include "WeatherManager.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 WeatherManager::WeatherManager() {}
 
@@ -26,10 +27,10 @@ bool WeatherManager::fetchNow() {
 
     DeviceConfig& dc = _cfg->getDeviceConfig();
 
-    // Build Open-Meteo URL (plain HTTP, no API key required)
+    // Build Open-Meteo URL (HTTPS; no API key required)
     char url[512];
     snprintf(url, sizeof(url),
-        "http://api.open-meteo.com/v1/forecast"
+        "https://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
         "precipitation,rain,snowfall,wind_speed_10m,wind_direction_10m,"
@@ -39,8 +40,14 @@ bool WeatherManager::fetchNow() {
         "&forecast_days=1&timezone=auto",
         dc.latitude, dc.longitude);
 
+    // Use WiFiClientSecure; certificate verification is skipped because
+    // embedding the full CA chain in firmware is impractical.  Traffic is
+    // still encrypted via TLS, protecting against passive interception.
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+
     HTTPClient http;
-    http.begin(url);
+    http.begin(secureClient, url);
     http.setTimeout(WEATHER_HTTP_TIMEOUT_MS);
     int code = http.GET();
     if (code != 200) {

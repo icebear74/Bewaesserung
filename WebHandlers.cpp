@@ -566,8 +566,10 @@ static void handleSaveHardware() {
     // ── Parse pumps ───────────────────────────────────────────────────────────
     // pumpCount holds the highest allocated pump index (from JS _nextPumpIdx).
     // Deleted pumps have no form fields; we skip gaps by checking for p{i}_name presence.
-    // We scan up to PUMP_SCAN_FACTOR times the maximum pump count to safely handle
-    // sessions with many repeated add/delete cycles (JS never resets _nextPumpIdx).
+    // Static constant explaining the scan factor: since the JS counter _nextPumpIdx is
+    // never decremented after deletions, the form may submit a pumpCount much larger
+    // than MAX_RELAY_COUNT.  Scanning up to PUMP_SCAN_FACTOR × MAX_RELAY_COUNT allows
+    // for that many add/delete cycles within a single editing session without capping.
     static const int PUMP_SCAN_FACTOR = 8;
     int pumpScanLimit = constrain(
         g_server->hasArg("pumpCount") ? g_server->arg("pumpCount").toInt() : 0,
@@ -892,22 +894,18 @@ static void handleConfigWatering() {
     page = replaceToken(page, "{watering_status}", wateringStatus);
 
     // Pump names JSON array for JavaScript add-assign function
-    String pumpNamesJson = "[";
-    for (int i = 0; i < hw.relayCount; i++) {
-        if (i > 0) pumpNamesJson += ",";
-        pumpNamesJson += "\"";
-        if (hw.pumps[i].name[0]) {
-            String n = String(hw.pumps[i].name);
-            n.replace("\\", "\\\\");
-            n.replace("\"", "\\\"");
-            pumpNamesJson += n;
-        } else {
-            pumpNamesJson += "Pumpe "; pumpNamesJson += (i + 1);
+    // Use ArduinoJson to ensure all special characters are properly escaped
+    {
+        JsonDocument pumpNamesDoc;
+        JsonArray arr = pumpNamesDoc.to<JsonArray>();
+        for (int i = 0; i < hw.relayCount; i++) {
+            arr.add(hw.pumps[i].name[0] ? String(hw.pumps[i].name)
+                                        : ("Pumpe " + String(i + 1)));
         }
-        pumpNamesJson += "\"";
+        String pumpNamesJson;
+        serializeJson(arr, pumpNamesJson);
+        page = replaceToken(page, "{pump_names_json}", pumpNamesJson);
     }
-    pumpNamesJson += "]";
-    page = replaceToken(page, "{pump_names_json}", pumpNamesJson);
     page = replaceToken(page, "{pumpCount}", String(hw.relayCount));
     page = replaceToken(page, "{slotCount}", String(sc.slotCount));
 

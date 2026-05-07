@@ -27,9 +27,11 @@ void WateringScheduler::update() {
 
     // ── Step 1: advance running pump ─────────────────────────────────────────
     if (_pumpRunning) {
-        // Millis wraparound-safe comparison: same pattern used in RelayManager
-        static const unsigned long HALF = 0x80000000UL;
-        if (_pumpOffAt != 0 && (millis() - _pumpOffAt) < HALF) {
+        // Millis wraparound-safe deadline check: after the deadline, millis() - target
+        // wraps to a large positive value >= 2^31; before the deadline the difference
+        // is small (< 2^31).  Subtract unsigned and compare to MILLIS_HALF_RANGE.
+        static const unsigned long MILLIS_HALF_RANGE = 0x80000000UL;
+        if (_pumpOffAt != 0 && (millis() - _pumpOffAt) < MILLIS_HALF_RANGE) {
             _rm->deactivateRelay(_activePump);
             Serial.printf("[Sched] Pump %d done.\n", _activePump);
             _pumpRunning = false;

@@ -302,7 +302,7 @@ bool ConfigManager::loadSlotConfig() {
             WateringSlot& s = _slotConfig.slots[si];
             s = WateringSlot{};
             char nameBuf[32];
-            snprintf(nameBuf, sizeof(nameBuf), "Schaltzeit %d", si + 1);
+            snprintf(nameBuf, sizeof(nameBuf), "Slot %d", si + 1);
             strlcpy(s.name, nameBuf, sizeof(s.name));
             s.enabled     = e["active"] | true;
             s.triggerType = TRIGGER_FIXED_TIME;

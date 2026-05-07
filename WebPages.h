@@ -470,6 +470,10 @@ function onTriggerChange(si,v){
   var row=document.getElementById('offsetRow'+si);
   if(row) row.style.display=(v==='4')?'flex':'none';
 }
+function updateSlotHeading(slotNum,input){
+  var b=input.closest('.pump-entry').querySelector('b');
+  if(b) b.textContent='\u23F1 '+slotNum+' \u2013 '+input.value;
+}
 function addSlot(){
   var si=_nextSlotIdx++;
   var html=mkSlot(si,{});
@@ -506,7 +510,7 @@ function deleteAssign(si,ai){
 }
 function mkSlot(si,d){
   d=d||{};
-  var si1=si+1; // pre-compute slot display number (avoids ambiguous string concat in oninput)
+  var si1=si+1; // numeric slot number – pre-computed to ensure integer arithmetic in template strings
   var nm=d.name||('Slot '+(si+1));
   var en=d.enabled!==false?'checked':'';
   var tr=d.triggerType||0;
@@ -532,7 +536,7 @@ function mkSlot(si,d){
     +'<button type="button" onclick="deleteSlot('+si+')" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div>'
     +'<div class="form-row">'
     +'<div class="form-col"><label><input type="checkbox" name="s'+si+'_enabled" '+en+'> Aktiv</label></div>'
-    +'<div class="form-col"><label>Name</label><input type="text" name="s'+si+'_name" value="'+nm+'" maxlength="31" oninput="this.closest(\'.pump-entry\').querySelector(\'b\').textContent=\'\u23F1 '+si1+' \u2013 \'+this.value" required></div>'
+    +'<div class="form-col"><label>Name</label><input type="text" name="s'+si+'_name" value="'+nm+'" maxlength="31" oninput="updateSlotHeading('+si1+',this)" required></div>'
     +'</div>'
     +'<div class="form-row">'
     +'<div class="form-col"><label>Ausl&ouml;ser</label><select name="s'+si+'_trigger" onchange="onTriggerChange('+si+',this.value)">'+trOpts+'</select></div>'
