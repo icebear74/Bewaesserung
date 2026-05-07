@@ -1,11 +1,41 @@
 #include "RelayManager.h"
+#include <new>
+#include <string.h>
+#include <time.h>
+
+static const int WATCHDOG_SHUTDOWN_MAX_RETRIES = 10;
+static const int WATCHDOG_SHUTDOWN_RETRY_DELAY_MS = 20;
+
+static bool expanderHasAssignedPump(const HardwareConfig& config, int expanderIndex) {
+    if (expanderIndex < 0 || expanderIndex >= config.expanderCount) return false;
+
+    for (int i = 0; i < config.relayCount; i++) {
+        const PumpEntry& pump = config.pumps[i];
+        if (!pump.enabled || pump.outputType != OUTPUT_TYPE_PCF8574) continue;
+        if (pump.expanderIndex == (uint8_t)expanderIndex) return true;
+    }
+    return false;
+}
 
 RelayManager::RelayManager() {
     memset(_pcfDevices, 0, sizeof(_pcfDevices));
     memset(_pcfOk,      0, sizeof(_pcfOk));
+    memset(_runtime,    0, sizeof(_runtime));
+    _stateMutex = xSemaphoreCreateMutex();
+    if (!_stateMutex) {
+        Serial.println("[Relay] ERROR: failed to create state mutex.");
+    }
 }
 
 RelayManager::~RelayManager() {
+    stopWatchdogTask();
+    allOff();
+
+    if (_stateMutex) {
+        vSemaphoreDelete(_stateMutex);
+        _stateMutex = nullptr;
+    }
+
     for (int d = 0; d < MAX_EXPANDER_COUNT; d++) {
         delete _pcfDevices[d];
         _pcfDevices[d] = nullptr;
@@ -27,17 +57,203 @@ bool RelayManager::isPumpValid(const PumpEntry& p) const {
     return false;
 }
 
+void RelayManager::updatePumpStatusLocked(int index, const char* status) {
+    if (index < 0 || index >= MAX_RELAY_COUNT) return;
+    strlcpy(_runtime[index].lastStatus, status ? status : "", sizeof(_runtime[index].lastStatus));
+}
+
+void RelayManager::updatePumpErrorLocked(int index, const char* err) {
+    if (index < 0 || index >= MAX_RELAY_COUNT) return;
+    strlcpy(_runtime[index].lastError, err ? err : "", sizeof(_runtime[index].lastError));
+}
+
+bool RelayManager::setPumpOnLocked(int index, int slotIndex, int requestedDurationSec, const char* source) {
+    if (index < 0 || index >= _config.relayCount) {
+        Serial.printf("[Relay] activateRelay: index %d out of range.\n", index);
+        return false;
+    }
+
+    const PumpEntry& p = _config.pumps[index];
+    if (!p.enabled) {
+        Serial.printf("[Relay] activateRelay: pump %d is disabled.\n", index);
+        updatePumpErrorLocked(index, "pump disabled");
+        updatePumpStatusLocked(index, "error");
+        return false;
+    }
+    if (!isPumpValid(p)) {
+        Serial.printf("[Relay] activateRelay: pump %d has invalid configuration.\n", index);
+        updatePumpErrorLocked(index, "invalid pump configuration");
+        updatePumpStatusLocked(index, "error");
+        return false;
+    }
+
+    writeRelay(index, true);
+    _relayState[index] = true;
+    _runtime[index].running = true;
+    _runtime[index].lastStartMs = millis();
+    _runtime[index].lastStartEpoch = time(nullptr);
+    _runtime[index].activeSlotIndex = slotIndex;
+    _runtime[index].requestedDurationSec = requestedDurationSec;
+    _runtime[index].maxRuntimeSec = p.maxRuntimeSec;
+    _runtime[index].lastError[0] = '\0';
+    updatePumpStatusLocked(index, "running");
+
+    if (p.outputType == OUTPUT_TYPE_GPIO) {
+        Serial.printf("[Relay] Pump %d (GPIO %d) ON [%s]\n", index, p.pin, source ? source : "n/a");
+    } else {
+        const char* expName = _config.expanders[p.expanderIndex].name;
+        Serial.printf("[Relay] Pump %d (\"%s\" ch%d) ON [%s]\n",
+                      index, expName, p.i2cChannel, source ? source : "n/a");
+    }
+    return true;
+}
+
+bool RelayManager::setPumpOffLocked(int index, const char* reason) {
+    if (index < 0 || index >= _config.relayCount) return false;
+
+    const PumpEntry& p = _config.pumps[index];
+    if (!isPumpValid(p)) {
+        updatePumpErrorLocked(index, "invalid pump configuration");
+        updatePumpStatusLocked(index, "error");
+        return false;
+    }
+
+    writeRelay(index, false);
+    _relayState[index] = false;
+    _testOffAt[index]  = 0;
+
+    _runtime[index].running = false;
+    _runtime[index].lastStopMs = millis();
+    _runtime[index].lastStopEpoch = time(nullptr);
+    _runtime[index].activeSlotIndex = -1;
+    _runtime[index].requestedDurationSec = 0;
+    updatePumpStatusLocked(index, "stopped");
+
+    if (p.outputType == OUTPUT_TYPE_GPIO) {
+        Serial.printf("[Relay] Pump %d (GPIO %d) OFF [%s]\n", index, p.pin, reason ? reason : "off");
+    } else {
+        const char* expName = _config.expanders[p.expanderIndex].name;
+        Serial.printf("[Relay] Pump %d (\"%s\" ch%d) OFF [%s]\n",
+                      index, expName, p.i2cChannel, reason ? reason : "off");
+    }
+    return true;
+}
+
+void RelayManager::watchdogTaskEntry(void* arg) {
+    RelayManager* self = static_cast<RelayManager*>(arg);
+    if (!self) {
+        Serial.println("[Relay][Watchdog] ERROR: task started without RelayManager instance.");
+        vTaskDelete(nullptr);
+        return;
+    }
+    self->watchdogLoop();
+    self->_watchdogTask = nullptr;
+    vTaskDelete(nullptr);
+}
+
+void RelayManager::watchdogLoop() {
+    const TickType_t delayTicks = pdMS_TO_TICKS(1000);
+    unsigned long lastLockWarnAt = 0;
+    while (_watchdogRun) {
+        if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            for (int i = 0; i < _config.relayCount; i++) {
+                if (!_runtime[i].running) continue;
+                int maxRuntimeSec = (_runtime[i].maxRuntimeSec > 0) ? _runtime[i].maxRuntimeSec : 0;
+                if (maxRuntimeSec <= 0) continue;
+
+                unsigned long elapsedMs = millis() - _runtime[i].lastStartMs;
+                unsigned long maxMs = (unsigned long)maxRuntimeSec * 1000UL;
+                if (elapsedMs >= maxMs) {
+                    char err[96];
+                    snprintf(err, sizeof(err), "runtime exceeded (%lu s/%u s)",
+                             elapsedMs / 1000UL, (unsigned)maxRuntimeSec);
+                    updatePumpErrorLocked(i, err);
+                    setPumpOffLocked(i, "watchdog max runtime");
+                    updatePumpStatusLocked(i, "watchdog-shutdown");
+                    Serial.printf("[Relay][Watchdog] Pump %d forced OFF: %s\n", i, err);
+                }
+            }
+            xSemaphoreGive(_stateMutex);
+        } else {
+            unsigned long now = millis();
+            if (now - lastLockWarnAt > 5000UL) {
+                Serial.println("[Relay][Watchdog] WARN: state mutex busy, retrying.");
+                lastLockWarnAt = now;
+            }
+        }
+        vTaskDelay(delayTicks);
+    }
+}
+
+void RelayManager::ensureWatchdogTask() {
+    if (_watchdogTask) return;
+    _watchdogRun = true;
+
+    const BaseType_t watchdogCore =
+#if defined(ARDUINO_RUNNING_CORE)
+        (ARDUINO_RUNNING_CORE == 0) ? 1 : 0;
+#else
+        0;
+#endif
+
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        RelayManager::watchdogTaskEntry,
+        "pump-watchdog",
+        4096,
+        this,
+        1,
+        &_watchdogTask,
+        watchdogCore
+    );
+
+    if (ok != pdPASS) {
+        _watchdogTask = nullptr;
+        _watchdogRun = false;
+        Serial.println("[Relay] ERROR: could not start watchdog task.");
+    } else {
+        Serial.printf("[Relay] Watchdog task started on core %d.\n", (int)watchdogCore);
+    }
+}
+
+void RelayManager::stopWatchdogTask() {
+    _watchdogRun = false;
+    if (_watchdogTask) {
+        // Give the task a short window to leave its loop and self-delete.
+        for (int i = 0; i < WATCHDOG_SHUTDOWN_MAX_RETRIES && _watchdogTask; i++) {
+            vTaskDelay(pdMS_TO_TICKS(WATCHDOG_SHUTDOWN_RETRY_DELAY_MS));
+        }
+        if (_watchdogTask) {
+            TaskHandle_t handle = _watchdogTask;
+            _watchdogTask = nullptr;
+            vTaskDelete(handle);
+        }
+    }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 void RelayManager::begin(HardwareConfig& config) {
+    stopWatchdogTask();
+
+    bool stateLocked = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        stateLocked = true;
+    } else if (_stateMutex) {
+        Serial.println("[Relay] WARN: begin() proceeding without state mutex lock.");
+    }
     _config = config;
-    _config.relayCount    = constrain(_config.relayCount, 0, MAX_RELAY_COUNT);
+    _config.relayCount = constrain(_config.relayCount, 0, MAX_RELAY_COUNT);
     _config.expanderCount = constrain(_config.expanderCount, 0, MAX_EXPANDER_COUNT);
 
-    // Cancel any pending test timeouts on reload
+    // Reset runtime state snapshot and pending test deadlines.
     for (int i = 0; i < MAX_RELAY_COUNT; i++) {
         _testOffAt[i] = 0;
+        _relayState[i] = false;
+        memset(&_runtime[i], 0, sizeof(_runtime[i]));
+        _runtime[i].activeSlotIndex = -1;
+        updatePumpStatusLocked(i, "idle");
     }
+    if (_stateMutex && stateLocked) xSemaphoreGive(_stateMutex);
 
     // ── GPIO pins ─────────────────────────────────────────────────────────────
     // Pre-set the output register to the safe (off) level BEFORE enabling the
@@ -54,8 +270,8 @@ void RelayManager::begin(HardwareConfig& config) {
 
     // ── PCF8574 / PCF8575 expanders ───────────────────────────────────────────
     // Each expander is indexed directly by its position in _config.expanders[].
-    // Delete any objects from a previous begin() call and create fresh instances
-    // so that Adafruit_PCF8574::begin() always starts with i2c_dev == NULL.
+    // Delete any objects from a previous begin() call and create fresh wrappers
+    // around the raw I2C write path for safe PCF startup on ESP32.
     for (int d = 0; d < MAX_EXPANDER_COUNT; d++) {
         delete _pcfDevices[d];
         _pcfDevices[d] = nullptr;
@@ -64,12 +280,17 @@ void RelayManager::begin(HardwareConfig& config) {
     for (int d = 0; d < _config.expanderCount; d++) {
         const ExpanderEntry& e = _config.expanders[d];
         if (!e.enabled) continue;
-        _pcfDevices[d] = new (std::nothrow) Adafruit_PCF8574();
+        if (!expanderHasAssignedPump(_config, d)) {
+            Serial.printf("[Relay] Skipping expander \"%s\" (0x%02X) - no pump assigned yet.\n",
+                          e.name, e.i2cAddress);
+            continue;
+        }
+        _pcfDevices[d] = new (std::nothrow) Pcf857xDevice();
         if (!_pcfDevices[d]) {
             Serial.printf("[Relay] ERROR: out of memory allocating PCF device %d\n", d);
             continue;
         }
-        _pcfOk[d] = _pcfDevices[d]->begin(e.i2cAddress);
+        _pcfOk[d] = _pcfDevices[d]->begin(e.i2cAddress, e.chipType);
         if (_pcfOk[d]) {
             const char* typeName = (e.chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575" : "PCF8574";
             Serial.printf("[Relay] %s \"%s\" (0x%02X) initialized.\n",
@@ -90,118 +311,135 @@ void RelayManager::begin(HardwareConfig& config) {
         }
     }
 
-    allOff();  // Final safe-state pass for all outputs
+    // Final safe-state pass for all configured outputs
+    stateLocked = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        stateLocked = true;
+    } else if (_stateMutex) {
+        Serial.println("[Relay] WARN: begin() safe-state pass without mutex lock.");
+    }
+    for (int i = 0; i < _config.relayCount; i++) {
+        if (isPumpValid(_config.pumps[i])) {
+            setPumpOffLocked(i, "init");
+        }
+    }
+    if (_stateMutex && stateLocked) xSemaphoreGive(_stateMutex);
+
+    ensureWatchdogTask();
+
     Serial.printf("[Relay] Initialized %d pump(s), %d expander(s).\n",
                   _config.relayCount, _config.expanderCount);
 }
 
-bool RelayManager::activateRelay(int index, bool armed) {
+bool RelayManager::activateRelay(int index, bool armed, int slotIndex, int requestedDurationSec) {
     if (!armed) {
-        Serial.printf("[Relay] Activate relay %d blocked – not armed (safety lock).\n", index);
+        Serial.printf("[Relay] Activate pump %d blocked – not armed (safety lock).\n", index);
+        if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            updatePumpErrorLocked(index, "not armed");
+            updatePumpStatusLocked(index, "blocked");
+            xSemaphoreGive(_stateMutex);
+        }
         return false;
     }
-    if (index < 0 || index >= _config.relayCount) {
-        Serial.printf("[Relay] activateRelay: index %d out of range.\n", index);
-        return false;
+
+    bool ok = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        ok = setPumpOnLocked(index, slotIndex, requestedDurationSec, "scheduler");
+        xSemaphoreGive(_stateMutex);
     }
-    const PumpEntry& p = _config.pumps[index];
-    if (!p.enabled) {
-        Serial.printf("[Relay] activateRelay: pump %d is disabled.\n", index);
-        return false;
-    }
-    if (!isPumpValid(p)) {
-        Serial.printf("[Relay] activateRelay: pump %d has invalid configuration.\n", index);
-        return false;
-    }
-    writeRelay(index, true);
-    _relayState[index] = true;
-    if (p.outputType == OUTPUT_TYPE_GPIO) {
-        Serial.printf("[Relay] Relay %d (GPIO %d) ON\n", index, p.pin);
-    } else {
-        const char* expName = _config.expanders[p.expanderIndex].name;
-        Serial.printf("[Relay] Relay %d (\"%s\" ch%d) ON\n", index, expName, p.i2cChannel);
-    }
-    return true;
+    return ok;
 }
 
-bool RelayManager::deactivateRelay(int index) {
-    if (index < 0 || index >= _config.relayCount) return false;
-    writeRelay(index, false);
-    _relayState[index] = false;
-    _testOffAt[index]  = 0;
-    const PumpEntry& p = _config.pumps[index];
-    if (p.outputType == OUTPUT_TYPE_GPIO) {
-        Serial.printf("[Relay] Relay %d (GPIO %d) OFF\n", index, p.pin);
-    } else {
-        const char* expName = _config.expanders[p.expanderIndex].name;
-        Serial.printf("[Relay] Relay %d (\"%s\" ch%d) OFF\n", index, expName, p.i2cChannel);
+bool RelayManager::deactivateRelay(int index, const char* reason) {
+    bool ok = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        ok = setPumpOffLocked(index, reason);
+        xSemaphoreGive(_stateMutex);
     }
-    return true;
+    return ok;
+}
+
+bool RelayManager::stopSafely(int index, const char* reason) {
+    return deactivateRelay(index, reason ? reason : "safe stop");
 }
 
 void RelayManager::allOff() {
-    for (int i = 0; i < MAX_RELAY_COUNT; i++) {
-        if (i < _config.relayCount && isPumpValid(_config.pumps[i])) {
-            writeRelay(i, false);
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        for (int i = 0; i < MAX_RELAY_COUNT; i++) {
+            if (i < _config.relayCount && isPumpValid(_config.pumps[i])) {
+                setPumpOffLocked(i, "all off");
+            } else {
+                _relayState[i] = false;
+                _testOffAt[i]  = 0;
+                _runtime[i].running = false;
+                _runtime[i].activeSlotIndex = -1;
+                updatePumpStatusLocked(i, "idle");
+            }
         }
-        _relayState[i] = false;
-        _testOffAt[i]  = 0;
+        xSemaphoreGive(_stateMutex);
     }
-    Serial.println("[Relay] All relays OFF.");
+    Serial.println("[Relay] All pumps OFF.");
 }
 
 bool RelayManager::isActive(int index) const {
     if (index < 0 || index >= MAX_RELAY_COUNT) return false;
-    return _relayState[index];
+    bool active = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        active = _relayState[index];
+        xSemaphoreGive(_stateMutex);
+    } else {
+        // Best-effort fallback: return cached state when mutex is temporarily busy.
+        active = _relayState[index];
+        Serial.printf("[Relay] WARN: isActive(%d) using cached state (mutex busy).\n", index);
+    }
+    return active;
+}
+
+bool RelayManager::getPumpRuntimeInfo(int index, PumpRuntimeInfo& out) const {
+    if (index < 0 || index >= MAX_RELAY_COUNT) return false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        out = _runtime[index];
+        xSemaphoreGive(_stateMutex);
+        return true;
+    }
+    return false;
 }
 
 bool RelayManager::testActivateRelay(int index) {
-    if (index < 0 || index >= _config.relayCount) {
-        Serial.printf("[Relay] testActivateRelay: index %d out of range.\n", index);
-        return false;
+    bool ok = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        if (index < 0 || index >= _config.relayCount) {
+            Serial.printf("[Relay] testActivateRelay: index %d out of range.\n", index);
+            xSemaphoreGive(_stateMutex);
+            return false;
+        }
+
+        const PumpEntry& p = _config.pumps[index];
+        int timeout = (p.maxRuntimeSec > 0) ? p.maxRuntimeSec : 30;
+        ok = setPumpOnLocked(index, -1, timeout, "web-test");
+        if (ok) {
+            _testOffAt[index] = millis() + ((unsigned long)timeout * 1000UL);
+            if (p.outputType == OUTPUT_TYPE_GPIO) {
+                Serial.printf("[Relay] TEST pump %d (GPIO %d) ON – auto-off in %ds\n",
+                              index, p.pin, timeout);
+            } else {
+                const char* expName = _config.expanders[p.expanderIndex].name;
+                Serial.printf("[Relay] TEST pump %d (\"%s\" ch%d) ON – auto-off in %ds\n",
+                              index, expName, p.i2cChannel, timeout);
+            }
+        }
+        xSemaphoreGive(_stateMutex);
     }
-    const PumpEntry& p = _config.pumps[index];
-    if (!p.enabled) {
-        Serial.printf("[Relay] testActivateRelay: pump %d is disabled.\n", index);
-        return false;
-    }
-    if (!isPumpValid(p)) {
-        Serial.printf("[Relay] testActivateRelay: pump %d has invalid configuration.\n", index);
-        return false;
-    }
-    writeRelay(index, true);
-    _relayState[index] = true;
-    int timeout = (p.maxRuntimeSec > 0) ? p.maxRuntimeSec : 30;
-    _testOffAt[index] = millis() + ((unsigned long)timeout * 1000UL);
-    if (p.outputType == OUTPUT_TYPE_GPIO) {
-        Serial.printf("[Relay] TEST pump %d (GPIO %d) ON – auto-off in %ds\n",
-                      index, p.pin, timeout);
-    } else {
-        const char* expName = _config.expanders[p.expanderIndex].name;
-        Serial.printf("[Relay] TEST pump %d (\"%s\" ch%d) ON – auto-off in %ds\n",
-                      index, expName, p.i2cChannel, timeout);
-    }
-    return true;
+    return ok;
 }
 
 bool RelayManager::testDeactivateRelay(int index) {
-    if (index < 0 || index >= _config.relayCount) {
-        Serial.printf("[Relay] testDeactivateRelay: index %d out of range.\n", index);
-        return false;
+    bool ok = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        ok = setPumpOffLocked(index, "web-test off");
+        xSemaphoreGive(_stateMutex);
     }
-    const PumpEntry& p = _config.pumps[index];
-    if (!isPumpValid(p)) return false;
-    writeRelay(index, false);
-    _relayState[index] = false;
-    _testOffAt[index]  = 0;
-    if (p.outputType == OUTPUT_TYPE_GPIO) {
-        Serial.printf("[Relay] TEST pump %d (GPIO %d) OFF\n", index, p.pin);
-    } else {
-        const char* expName = _config.expanders[p.expanderIndex].name;
-        Serial.printf("[Relay] TEST pump %d (\"%s\" ch%d) OFF\n",
-                      index, expName, p.i2cChannel);
-    }
-    return true;
+    return ok;
 }
 
 void RelayManager::update() {
@@ -209,19 +447,17 @@ void RelayManager::update() {
     // MILLIS_HALF_RANGE: half of unsigned long range; used for wraparound-safe
     // comparison after ~49 days when millis() rolls over.
     static const unsigned long MILLIS_HALF_RANGE = 0x80000000UL;
-    for (int i = 0; i < _config.relayCount; i++) {
-        // Standard Arduino millis() wraparound-safe "has deadline passed?" pattern:
-        // _testOffAt[i] is set to millis() + timeout, i.e. a future timestamp.
-        // Case A – not yet reached (now < _testOffAt): unsigned subtraction
-        //          underflows to a huge value (>= MILLIS_HALF_RANGE) → FALSE, no shutoff.
-        // Case B – deadline reached  (now >= _testOffAt): result is small
-        //          (0 .. elapsed ms) < MILLIS_HALF_RANGE → TRUE, shutoff triggered.
-        if (_testOffAt[i] != 0 && (now - _testOffAt[i]) < MILLIS_HALF_RANGE) {
-            writeRelay(i, false);
-            _relayState[i] = false;
-            _testOffAt[i]  = 0;
-            Serial.printf("[Relay] TEST pump %d auto-off (timeout reached)\n", i);
+
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (int i = 0; i < _config.relayCount; i++) {
+            // Keep test auto-off behavior in main loop for immediate UX feedback;
+            // watchdog task on the other core remains the independent failsafe.
+            if (_testOffAt[i] != 0 && (now - _testOffAt[i]) < MILLIS_HALF_RANGE) {
+                setPumpOffLocked(i, "test timeout");
+                Serial.printf("[Relay] TEST pump %d auto-off (timeout reached)\n", i);
+            }
         }
+        xSemaphoreGive(_stateMutex);
     }
 }
 
@@ -245,6 +481,9 @@ void RelayManager::writeRelay(int index, bool on) {
                           p.i2cChannel, di);
             return;
         }
-        _pcfDevices[di]->digitalWrite(p.i2cChannel, level);
+        if (!_pcfDevices[di]->digitalWrite(p.i2cChannel, level)) {
+            Serial.printf("[Relay] writeRelay: I2C write failed for expander %d channel %d.\n",
+                          di, p.i2cChannel);
+        }
     }
 }

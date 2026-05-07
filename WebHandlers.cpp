@@ -13,6 +13,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <math.h>
 
 // ─── Module-level state ───────────────────────────────────────────────────────
 
@@ -380,10 +381,23 @@ static void handleSaveLocation() {
         return;
     }
     DeviceConfig& cfg = g_app->getConfigManager()->getDeviceConfig();
+    float oldLatitude = cfg.latitude;
+    float oldLongitude = cfg.longitude;
     if (g_server->hasArg("latitude"))     cfg.latitude  = g_server->arg("latitude").toFloat();
     if (g_server->hasArg("longitude"))    cfg.longitude = g_server->arg("longitude").toFloat();
     if (g_server->hasArg("locationName")) strlcpy(cfg.locationName, g_server->arg("locationName").c_str(), sizeof(cfg.locationName));
     g_app->getConfigManager()->saveDeviceConfig();
+
+    // Ignore tiny float round-trip differences from the form; ~5 m is still the
+    // same practical location for weather forecast purposes.
+    static const float LOCATION_EPSILON = 0.00005f;
+    bool locationChanged = (fabsf(cfg.latitude - oldLatitude) > LOCATION_EPSILON) ||
+                           (fabsf(cfg.longitude - oldLongitude) > LOCATION_EPSILON);
+    WeatherManager* wm = g_app->getWeatherManager();
+    if (locationChanged && wm) {
+        wm->requestRefresh();
+        wm->fetchNow();
+    }
 
     String page = buildPage(HTML_SAVED_LIVE);
     page = replaceToken(page, "{saved_back_url}", "/config_location");
@@ -756,9 +770,14 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<b style=\"font-size:1.05em\">&#128337; Slot ";  r += (si + 1);
     if (slot.name[0]) { r += " &ndash; "; r += String(slot.name); }
     r += "</b>";
+    r += "<div style=\"display:flex;gap:6px;flex-wrap:wrap\">";
+    r += "<button type=\"button\" onclick=\"editSlot("; r += si;
+    r += ")\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>";
     r += "<button type=\"button\" onclick=\"deleteSlot("; r += si;
-    r += ")\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; Slot l&#246;schen</button>";
+    r += ")\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
     r += "</div>";
+    r += "</div>";
+    r += "<div id=\"slotBody"; r += si; r += "\" style=\"display:none\">";
     // Enabled + Name row
     r += "<div class=\"form-row\">";
     r += "<div class=\"form-col\"><label><input type=\"checkbox\" name=\"s"; r += si; r += "_enabled\"";
@@ -793,7 +812,7 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
         r += ">"; r += baseLabels[b]; r += "</option>";
     }
     r += "</select></div>";
-    r += "<div class=\"form-col\"><label>Offset (Min., negativ = davor)</label>";
+    r += "<div class=\"form-col\"><label>Offset (Min., negativ = davor, positiv = danach)</label>";
     r += "<input type=\"number\" name=\"s"; r += si; r += "_offsetMin\" value=\"";
     r += slot.offsetMinutes; r += "\" min=\"-720\" max=\"720\"></div>";
     r += "</div>";
@@ -829,7 +848,7 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += slot.reducePct; r += "\" min=\"1\" max=\"99\"></div>";
     r += "</div></details>";
     // Pump assignments for this slot
-    r += "<div style=\"margin-top:10px\"><b>&#128167; Pumpenzuweisungen</b>";
+    r += "<div style=\"margin-top:10px\"><b>Schritt 2: &#128167; Pumpenzuweisungen</b>";
     r += "<div id=\"assigns"; r += si; r += "\">";
     // Render existing assignments for this slot
     int assignDisplayIdx = 0;
@@ -852,9 +871,11 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
         r += "<div class=\"form-col\"><label>Dauer (s)</label>";
         r += "<input type=\"number\" name=\"a"; r += si; r += "_"; r += assignDisplayIdx;
         r += "_duration\" value=\""; r += a.durationSec; r += "\" min=\"1\" max=\"7200\"></div>";
-        r += "<div style=\"padding-top:20px\">";
+        r += "<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">";
+        r += "<button type=\"button\" onclick=\"editAssign("; r += si; r += ","; r += assignDisplayIdx;
+        r += ")\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>";
         r += "<button type=\"button\" onclick=\"deleteAssign("; r += si; r += ","; r += assignDisplayIdx;
-        r += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005;</button>";
+        r += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
         r += "</div></div>";
         assignDisplayIdx++;
     }
@@ -869,7 +890,7 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     } else {
         r += "<p style=\"color:#dc3545;font-size:13px\">&#x26A0; Zuerst Pumpen in der Hardware-Konfiguration anlegen.</p>";
     }
-    r += "</div></div>";  // pump-assignments + slot-entry
+    r += "</div></div></div>";  // pump-assignments + slot-entry + slotBody
     return r;
 }
 

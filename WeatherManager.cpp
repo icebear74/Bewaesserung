@@ -10,6 +10,10 @@ void WeatherManager::begin(ConfigManager* cfg) {
     _fetchDue = true;  // fetch as soon as WiFi is available
 }
 
+void WeatherManager::requestRefresh() {
+    _fetchDue = true;
+}
+
 void WeatherManager::update() {
     if (!_cfg) return;
 
