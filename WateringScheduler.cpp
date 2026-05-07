@@ -27,12 +27,20 @@ void WateringScheduler::update() {
 
     // ── Step 1: advance running pump ─────────────────────────────────────────
     if (_pumpRunning) {
+        // If watchdog or manual action already shut this pump down, clear scheduler state.
+        if (!_rm->isActive(_activePump)) {
+            Serial.printf("[Sched] Pump %d no longer active (stopped externally).\n", _activePump);
+            _pumpRunning = false;
+            _activePump  = -1;
+            _pumpOffAt   = 0;
+        }
+
         // Millis wraparound-safe deadline check: after the deadline, millis() - target
         // wraps to a large positive value >= 2^31; before the deadline the difference
         // is small (< 2^31).  Subtract unsigned and compare to MILLIS_HALF_RANGE.
         static const unsigned long MILLIS_HALF_RANGE = 0x80000000UL;
-        if (_pumpOffAt != 0 && (millis() - _pumpOffAt) < MILLIS_HALF_RANGE) {
-            _rm->deactivateRelay(_activePump);
+        if (_pumpRunning && _pumpOffAt != 0 && (millis() - _pumpOffAt) < MILLIS_HALF_RANGE) {
+            _rm->deactivateRelay(_activePump, "slot runtime complete");
             Serial.printf("[Sched] Pump %d done.\n", _activePump);
             _pumpRunning = false;
             _activePump  = -1;
@@ -46,7 +54,7 @@ void WateringScheduler::update() {
         _qHead = (_qHead + 1) % SCHEDULER_QUEUE_SIZE;
 
         if (armed) {
-            if (_rm->activateRelay(item.pumpIndex, armed)) {
+            if (_rm->activateRelay(item.pumpIndex, armed, item.slotIndex, item.durationSec)) {
                 _pumpRunning = true;
                 _activePump  = item.pumpIndex;
                 _pumpOffAt   = millis() + (unsigned long)item.durationSec * 1000UL;
