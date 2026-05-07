@@ -179,7 +179,10 @@ bool ConfigManager::loadHardwareConfig() {
             continue;
         }
 
-        p.expanderIndex = (uint8_t)constrain((int)p.expanderIndex, 0, MAX_EXPANDER_COUNT - 1);
+        int maxExpanderIndex = (_hardwareConfig.expanderCount > 0)
+                                   ? (_hardwareConfig.expanderCount - 1)
+                                   : 0;
+        p.expanderIndex = (uint8_t)constrain((int)p.expanderIndex, 0, maxExpanderIndex);
         uint8_t maxChannel = 7;  // PCF8574 default
         if (p.expanderIndex < _hardwareConfig.expanderCount &&
             _hardwareConfig.expanders[p.expanderIndex].chipType == EXPANDER_TYPE_PCF8575) {
