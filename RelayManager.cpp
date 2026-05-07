@@ -3,6 +3,9 @@
 #include <string.h>
 #include <time.h>
 
+static const int WATCHDOG_SHUTDOWN_MAX_RETRIES = 10;
+static const int WATCHDOG_SHUTDOWN_RETRY_DELAY_MS = 20;
+
 RelayManager::RelayManager() {
     memset(_pcfDevices, 0, sizeof(_pcfDevices));
     memset(_pcfOk,      0, sizeof(_pcfOk));
@@ -151,7 +154,7 @@ void RelayManager::watchdogLoop() {
                 unsigned long maxMs = (unsigned long)maxRuntimeSec * 1000UL;
                 if (elapsedMs >= maxMs) {
                     char err[96];
-                    snprintf(err, sizeof(err), "runtime exceeded (%lus/%us)",
+                    snprintf(err, sizeof(err), "runtime exceeded (%lu s/%u s)",
                              elapsedMs / 1000UL, (unsigned)maxRuntimeSec);
                     updatePumpErrorLocked(i, err);
                     setPumpOffLocked(i, "watchdog max runtime");
@@ -205,8 +208,8 @@ void RelayManager::stopWatchdogTask() {
     _watchdogRun = false;
     if (_watchdogTask) {
         // Give the task a short window to leave its loop and self-delete.
-        for (int i = 0; i < 10 && _watchdogTask; i++) {
-            vTaskDelay(pdMS_TO_TICKS(20));
+        for (int i = 0; i < WATCHDOG_SHUTDOWN_MAX_RETRIES && _watchdogTask; i++) {
+            vTaskDelay(pdMS_TO_TICKS(WATCHDOG_SHUTDOWN_RETRY_DELAY_MS));
         }
         if (_watchdogTask) {
             TaskHandle_t handle = _watchdogTask;
@@ -221,9 +224,11 @@ void RelayManager::stopWatchdogTask() {
 void RelayManager::begin(HardwareConfig& config) {
     stopWatchdogTask();
 
-    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
-        Serial.println("[Relay] ERROR: begin() could not lock state mutex.");
-        return;
+    bool stateLocked = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        stateLocked = true;
+    } else if (_stateMutex) {
+        Serial.println("[Relay] WARN: begin() proceeding without state mutex lock.");
     }
     _config = config;
     _config.relayCount = constrain(_config.relayCount, 0, MAX_RELAY_COUNT);
@@ -237,7 +242,7 @@ void RelayManager::begin(HardwareConfig& config) {
         _runtime[i].activeSlotIndex = -1;
         updatePumpStatusLocked(i, "idle");
     }
-    if (_stateMutex) xSemaphoreGive(_stateMutex);
+    if (_stateMutex && stateLocked) xSemaphoreGive(_stateMutex);
 
     // ── GPIO pins ─────────────────────────────────────────────────────────────
     // Pre-set the output register to the safe (off) level BEFORE enabling the
@@ -291,16 +296,18 @@ void RelayManager::begin(HardwareConfig& config) {
     }
 
     // Final safe-state pass for all configured outputs
-    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
-        Serial.println("[Relay] ERROR: begin() safe-state pass could not lock mutex.");
-        return;
+    stateLocked = false;
+    if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        stateLocked = true;
+    } else if (_stateMutex) {
+        Serial.println("[Relay] WARN: begin() safe-state pass without mutex lock.");
     }
     for (int i = 0; i < _config.relayCount; i++) {
         if (isPumpValid(_config.pumps[i])) {
             setPumpOffLocked(i, "init");
         }
     }
-    if (_stateMutex) xSemaphoreGive(_stateMutex);
+    if (_stateMutex && stateLocked) xSemaphoreGive(_stateMutex);
 
     ensureWatchdogTask();
 
@@ -360,11 +367,13 @@ void RelayManager::allOff() {
 
 bool RelayManager::isActive(int index) const {
     if (index < 0 || index >= MAX_RELAY_COUNT) return false;
-    bool active = _relayState[index];
+    bool active = false;
     if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
         active = _relayState[index];
         xSemaphoreGive(_stateMutex);
     } else {
+        // Best-effort fallback: return cached state when mutex is temporarily busy.
+        active = _relayState[index];
         Serial.printf("[Relay] WARN: isActive(%d) using cached state (mutex busy).\n", index);
     }
     return active;
