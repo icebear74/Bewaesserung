@@ -270,8 +270,8 @@ void RelayManager::begin(HardwareConfig& config) {
 
     // ── PCF8574 / PCF8575 expanders ───────────────────────────────────────────
     // Each expander is indexed directly by its position in _config.expanders[].
-    // Delete any objects from a previous begin() call and create fresh instances
-    // so that Adafruit_PCF8574::begin() always starts with i2c_dev == NULL.
+    // Delete any objects from a previous begin() call and create fresh wrappers
+    // around the raw I2C write path for safe PCF startup on ESP32.
     for (int d = 0; d < MAX_EXPANDER_COUNT; d++) {
         delete _pcfDevices[d];
         _pcfDevices[d] = nullptr;
@@ -285,12 +285,12 @@ void RelayManager::begin(HardwareConfig& config) {
                           e.name, e.i2cAddress);
             continue;
         }
-        _pcfDevices[d] = new (std::nothrow) Adafruit_PCF8574();
+        _pcfDevices[d] = new (std::nothrow) Pcf857xDevice();
         if (!_pcfDevices[d]) {
             Serial.printf("[Relay] ERROR: out of memory allocating PCF device %d\n", d);
             continue;
         }
-        _pcfOk[d] = _pcfDevices[d]->begin(e.i2cAddress);
+        _pcfOk[d] = _pcfDevices[d]->begin(e.i2cAddress, e.chipType);
         if (_pcfOk[d]) {
             const char* typeName = (e.chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575" : "PCF8574";
             Serial.printf("[Relay] %s \"%s\" (0x%02X) initialized.\n",
@@ -481,6 +481,9 @@ void RelayManager::writeRelay(int index, bool on) {
                           p.i2cChannel, di);
             return;
         }
-        _pcfDevices[di]->digitalWrite(p.i2cChannel, level);
+        if (!_pcfDevices[di]->digitalWrite(p.i2cChannel, level)) {
+            Serial.printf("[Relay] writeRelay: I2C write failed for expander %d channel %d.\n",
+                          di, p.i2cChannel);
+        }
     }
 }

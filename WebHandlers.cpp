@@ -380,10 +380,19 @@ static void handleSaveLocation() {
         return;
     }
     DeviceConfig& cfg = g_app->getConfigManager()->getDeviceConfig();
+    float oldLatitude = cfg.latitude;
+    float oldLongitude = cfg.longitude;
     if (g_server->hasArg("latitude"))     cfg.latitude  = g_server->arg("latitude").toFloat();
     if (g_server->hasArg("longitude"))    cfg.longitude = g_server->arg("longitude").toFloat();
     if (g_server->hasArg("locationName")) strlcpy(cfg.locationName, g_server->arg("locationName").c_str(), sizeof(cfg.locationName));
     g_app->getConfigManager()->saveDeviceConfig();
+
+    bool locationChanged = (cfg.latitude != oldLatitude) || (cfg.longitude != oldLongitude);
+    WeatherManager* wm = g_app->getWeatherManager();
+    if (locationChanged && wm) {
+        wm->requestRefresh();
+        wm->fetchNow();
+    }
 
     String page = buildPage(HTML_SAVED_LIVE);
     page = replaceToken(page, "{saved_back_url}", "/config_location");

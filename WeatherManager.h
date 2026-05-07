@@ -18,6 +18,7 @@ public:
     void begin(ConfigManager* cfg);
     void update();           // call from main loop; auto-fetches when due
     bool fetchNow();         // force an immediate fetch (blocks briefly)
+    void requestRefresh();   // mark weather as needing a refresh soon
 
     const WeatherData& getData()    const { return _data; }
     bool  isAvailable()             const { return _data.available; }

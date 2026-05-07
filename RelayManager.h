@@ -1,11 +1,11 @@
 #pragma once
 #include <Arduino.h>
-#include <Adafruit_PCF8574.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include <time.h>
 #include "ConfigManager.h"
+#include "Pcf857xDevice.h"
 
 class RelayManager {
 public:
@@ -60,12 +60,9 @@ private:
     unsigned long    _testOffAt[MAX_RELAY_COUNT]   = {0};
     PumpRuntimeInfo  _runtime[MAX_RELAY_COUNT];
 
-    // One PCF device per expander entry; indexed directly by ExpanderEntry index.
-    // Stored as pointers so fresh objects are created on each begin() call,
-    // guaranteeing the Adafruit_PCF8574 constructor runs on clean heap memory and
-    // i2c_dev is always NULL before begin() is invoked (prevents heap-poison crash
-    // on library versions that call `delete i2c_dev` unconditionally).
-    Adafruit_PCF8574* _pcfDevices[MAX_EXPANDER_COUNT];
+    // One local PCF device wrapper per expander entry; indexed directly by the
+    // ExpanderEntry index.
+    Pcf857xDevice* _pcfDevices[MAX_EXPANDER_COUNT];
     bool              _pcfOk[MAX_EXPANDER_COUNT];
     mutable SemaphoreHandle_t _stateMutex = nullptr;
     TaskHandle_t      _watchdogTask = nullptr;
