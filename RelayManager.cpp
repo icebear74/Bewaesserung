@@ -11,7 +11,10 @@ bool RelayManager::isPumpValid(const PumpEntry& p) const {
     if (p.outputType == OUTPUT_TYPE_GPIO) return p.pin >= 0;
     if (p.outputType == OUTPUT_TYPE_PCF8574) {
         if (p.expanderIndex >= (uint8_t)_config.expanderCount) return false;
-        return _config.expanders[p.expanderIndex].enabled && _pcfOk[p.expanderIndex];
+        const ExpanderEntry& e = _config.expanders[p.expanderIndex];
+        if (!e.enabled || !_pcfOk[p.expanderIndex]) return false;
+        uint8_t maxChannel = (e.chipType == EXPANDER_TYPE_PCF8575) ? 15 : 7;
+        return p.i2cChannel <= maxChannel;
     }
     return false;
 }
@@ -215,6 +218,12 @@ void RelayManager::writeRelay(int index, bool on) {
         uint8_t di = p.expanderIndex;
         if (di >= MAX_EXPANDER_COUNT || !_pcfOk[di]) {
             Serial.printf("[Relay] writeRelay: expander %d not available.\n", di);
+            return;
+        }
+        uint8_t maxChannel = (_config.expanders[di].chipType == EXPANDER_TYPE_PCF8575) ? 15 : 7;
+        if (p.i2cChannel > maxChannel) {
+            Serial.printf("[Relay] writeRelay: channel %d out of range for expander %d.\n",
+                          p.i2cChannel, di);
             return;
         }
         _pcfDevices[di].digitalWrite(p.i2cChannel, level);
