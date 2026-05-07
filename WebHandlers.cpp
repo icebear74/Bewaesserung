@@ -13,6 +13,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <math.h>
 
 // ─── Module-level state ───────────────────────────────────────────────────────
 
@@ -387,7 +388,9 @@ static void handleSaveLocation() {
     if (g_server->hasArg("locationName")) strlcpy(cfg.locationName, g_server->arg("locationName").c_str(), sizeof(cfg.locationName));
     g_app->getConfigManager()->saveDeviceConfig();
 
-    bool locationChanged = (cfg.latitude != oldLatitude) || (cfg.longitude != oldLongitude);
+    static const float LOCATION_EPSILON = 0.00005f;
+    bool locationChanged = (fabsf(cfg.latitude - oldLatitude) > LOCATION_EPSILON) ||
+                           (fabsf(cfg.longitude - oldLongitude) > LOCATION_EPSILON);
     WeatherManager* wm = g_app->getWeatherManager();
     if (locationChanged && wm) {
         wm->requestRefresh();
