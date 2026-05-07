@@ -49,6 +49,7 @@ input[type=checkbox]{width:auto;margin-right:8px}
   <a href="/config_location">Standort</a>
   <a href="/config_hardware">Hardware</a>
   <a href="/config_watering">Bewässerung</a>
+  <a href="/watering_test">Testlauf</a>
 </nav>
 <div class="container">
 )rawhtml";
@@ -431,165 +432,218 @@ function testRelay(idx,action){
 )rawhtml";
 
 // ─── Watering Config Page ─────────────────────────────────────────────────────
-// Tokens: {watering_status} {pumpCount} {pump_names_json} {slotCount} {slot_rows_html}
+// Tokens: {watering_status} {pumpCount} {pump_names_json} {slotCount} {slot_names_json}
+//         {slot_rows_html} {assignCount} {assignment_rows_html} {pump_assignment_overview_html}
 
 const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#128167; Bew&#228;sserungsplan</h1>
   {watering_status}
   <div class="alert-info">
-    &#128161; <b>Schritt 1:</b> Slots anlegen (Ausl&#246;ser + Wetterbedingungen).<br>
-    <b>Schritt 2:</b> In jedem Slot Pumpen zuweisen (l&#228;uft <b>sequenziell</b>, nie gleichzeitig).<br>
-    Relative Zeiten sind m&#246;glich, z.B. <i>-30 Min vor Sonnenaufgang</i> oder <i>+60 Min nach Sonnenuntergang</i>.
+    &#128161; <b>1) Slots definieren:</b> Zeittrigger + Wetterregeln.<br>
+    <b>2) Pumpen zu Slots zuweisen:</b> separat als Liste (Bacula-ähnlich).<br>
+    Beide Pfade (Live + Testlauf) nutzen dieselbe Entscheidungs-Engine.
   </div>
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
     <input type="hidden" id="slotCount" name="slotCount" value="{slotCount}">
+    <input type="hidden" id="assignCount" name="assignCount" value="{assignCount}">
+
+    <h2 style="color:#1a6b3c;margin-top:8px">1) Slots</h2>
     <div id="slots">{slot_rows_html}</div>
     <div id="noSlotsMsg" style="display:{noSlotsMsg};color:#999;font-style:italic;margin-bottom:8px">
       Noch kein Slot angelegt. Slot hinzuf&#252;gen &#8594;
     </div>
-    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-      <button type="button" class="btn" onclick="addSlot()" style="background:#17a2b8">+ Slot hinzuf&#252;gen</button>
+    <button type="button" class="btn" onclick="addSlot()" style="background:#17a2b8">+ Slot hinzuf&#252;gen</button>
+
+    <h2 style="color:#1a6b3c;margin-top:18px">2) Pumpen-Zuweisungen</h2>
+    <div id="assignRows">{assignment_rows_html}</div>
+    <div id="noAssignmentsMsg" style="display:{noAssignmentsMsg};color:#999;font-style:italic;margin-bottom:8px">
+      Noch keine Pumpenzuweisung vorhanden.
+    </div>
+    <button type="button" class="btn" onclick="addAssignment()" style="background:#17a2b8">+ Zuweisung hinzuf&#252;gen</button>
+
+    <h2 style="color:#1a6b3c;margin-top:18px">3) Pumpen &#8594; Slots &#220;bersicht</h2>
+    <div id="pumpSlotOverview">{pump_assignment_overview_html}</div>
+
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" type="submit">&#128190; Speichern</button>
+      <a class="btn" href="/watering_test" style="background:#5a6268">&#128269; Testlauf</a>
     </div>
   </form>
 </div>
 <script>
 var pumpCount={pumpCount};
 var pumpNames={pump_names_json};
+var slotNames={slot_names_json};
 var _nextSlotIdx={slotCount};
+var _nextAssignIdx={assignCount};
 var dayL=['Mo','Di','Mi','Do','Fr','Sa','So'];
 function pumpOpts(selIdx){
   if(pumpCount===0) return '<option value="0" disabled>&#x26A0; Keine Pumpen konfiguriert</option>';
   var s='';
-  for(var i=0;i<pumpCount;i++){
-    s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+(pumpNames[i]||'Pumpe '+(i+1))+'</option>';
-  }
+  for(var i=0;i<pumpCount;i++) s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+(pumpNames[i]||('Pumpe '+(i+1)))+'</option>';
   return s;
 }
-function onTriggerChange(si,v){
-  var row=document.getElementById('offsetRow'+si);
-  if(row) row.style.display=(v==='4')?'flex':'none';
+function slotOpts(selIdx){
+  var s='',has=false;
+  for(var i=0;i<slotNames.length;i++){
+    if(slotNames[i]==null) continue;
+    has=true;
+    s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+slotNames[i]+'</option>';
+  }
+  return has?s:'<option value="0" disabled>&#x26A0; Kein Slot vorhanden</option>';
 }
-function toggleSlotEditor(si,forceOpen){
-  var body=document.getElementById('slotBody'+si);
-  if(!body) return;
-  if(forceOpen===true){ body.style.display='block'; return; }
-  body.style.display=(body.style.display==='none' || body.style.display==='')?'block':'none';
+function onTriggerChange(si,v){ var row=document.getElementById('offsetRow'+si); if(row) row.style.display=(v==='4')?'flex':'none'; }
+function toggleSlotEditor(si,forceOpen){ var body=document.getElementById('slotBody'+si); if(!body) return; if(forceOpen===true){body.style.display='block';return;} body.style.display=(body.style.display==='none'||body.style.display==='')?'block':'none'; }
+function editSlot(si){ toggleSlotEditor(si,true); var inp=document.querySelector('input[name=\"s'+si+'_name\"]'); if(inp){inp.focus();inp.scrollIntoView({behavior:'smooth',block:'center'});} }
+function refreshAssignmentSlotOptions(){
+  document.querySelectorAll('#assignRows select[name$=\"_slot\"]').forEach(function(sel){
+    var cur=parseInt(sel.value||'0'); sel.innerHTML=slotOpts(cur);
+  });
 }
-function editSlot(si){
-  toggleSlotEditor(si,true);
-  var inp=document.querySelector('input[name="s'+si+'_name"]');
-  if(inp){ inp.focus(); inp.scrollIntoView({behavior:'smooth',block:'center'}); }
-}
-function updateSlotHeading(slotNum,input){
+function updateSlotHeading(slotIdx,input){
   var b=input.closest('.pump-entry').querySelector('b');
-  if(b) b.textContent='\u23F1 '+slotNum+' \u2013 '+input.value;
+  var n=(input.value||('Slot '+(slotIdx+1)));
+  if(b) b.textContent='\u23F1 '+(slotIdx+1)+' \u2013 '+n;
+  slotNames[slotIdx]=(slotIdx+1)+' - '+n;
+  refreshAssignmentSlotOptions();
 }
 function addSlot(){
   var si=_nextSlotIdx++;
-  var html=mkSlot(si,{});
-  document.getElementById('slots').insertAdjacentHTML('beforeend',html);
+  slotNames[si]=(si+1)+' - Slot '+(si+1);
+  document.getElementById('slots').insertAdjacentHTML('beforeend',mkSlot(si,{}));
   document.getElementById('slotCount').value=_nextSlotIdx;
-  editSlot(si);
   document.getElementById('noSlotsMsg').style.display='none';
+  refreshAssignmentSlotOptions();
+  editSlot(si);
 }
 function deleteSlot(si){
-  var el=document.getElementById('slot'+si);
-  if(el)el.remove();
-  // Keep sparse indices stable; backend skips deleted indices by missing field names.
+  var el=document.getElementById('slot'+si); if(el)el.remove();
+  slotNames[si]=null;
   document.getElementById('slotCount').value=_nextSlotIdx;
-  var remaining=document.getElementById('slots').querySelectorAll('[id^="slot"]');
-  if(remaining.length===0)document.getElementById('noSlotsMsg').style.display='block';
+  if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0)document.getElementById('noSlotsMsg').style.display='block';
+  refreshAssignmentSlotOptions();
 }
-function getAssignCount(si){
-  var el=document.getElementById('aCount'+si);
-  return el?parseInt(el.value)||0:0;
-}
-function addAssign(si){
+function addAssignment(){
   if(pumpCount===0){alert('Bitte zuerst Pumpen konfigurieren.');return;}
-  var ac=getAssignCount(si);
-  var html='<div class="form-row" style="margin-top:6px;align-items:center" id="arow'+si+'_'+ac+'">'
-    +'<div class="form-col"><label>Pumpe</label><select name="a'+si+'_'+ac+'_pump">'+pumpOpts(0)+'</select></div>'
-    +'<div class="form-col"><label>Dauer (s)</label><input type="number" name="a'+si+'_'+ac+'_duration" value="60" min="1" max="7200"></div>'
-    +'<div style="padding-top:20px;display:flex;gap:6px;flex-wrap:wrap">'
-    +'<button type="button" onclick="editAssign('+si+','+ac+')" style="padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9998; Bearbeiten</button>'
-    +'<button type="button" onclick="deleteAssign('+si+','+ac+')" '
-    +'style="padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div></div>';
-  document.getElementById('assigns'+si).insertAdjacentHTML('beforeend',html);
-  document.getElementById('aCount'+si).value=ac+1;
+  var ai=_nextAssignIdx++;
+  var html='<div class=\"form-row\" style=\"margin-top:6px;align-items:center\" id=\"asrow'+ai+'\">'
+    +'<div class=\"form-col\"><label>Slot</label><select name=\"as'+ai+'_slot\">'+slotOpts(0)+'</select></div>'
+    +'<div class=\"form-col\"><label>Pumpe</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
+    +'<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as'+ai+'_duration\" value=\"60\" min=\"1\" max=\"7200\"></div>'
+    +'<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">'
+    +'<button type=\"button\" onclick=\"editAssignment('+ai+')\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>'
+    +'<button type=\"button\" onclick=\"deleteAssignment('+ai+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>'
+    +'</div></div>';
+  document.getElementById('assignRows').insertAdjacentHTML('beforeend',html);
+  document.getElementById('assignCount').value=_nextAssignIdx;
+  document.getElementById('noAssignmentsMsg').style.display='none';
 }
-function deleteAssign(si,ai){
-  var el=document.getElementById('arow'+si+'_'+ai);
-  if(el)el.remove();
+function deleteAssignment(ai){
+  var el=document.getElementById('asrow'+ai); if(el)el.remove();
+  if(document.getElementById('assignRows').querySelectorAll('[id^=\"asrow\"]').length===0)document.getElementById('noAssignmentsMsg').style.display='block';
 }
-function editAssign(si,ai){
-  var row=document.getElementById('arow'+si+'_'+ai);
-  if(!row) return;
-  var sel=row.querySelector('select');
-  if(sel){ sel.focus(); row.scrollIntoView({behavior:'smooth',block:'center'}); }
-}
+function editAssignment(ai){ var row=document.getElementById('asrow'+ai); if(!row)return; var sel=row.querySelector('select'); if(sel){sel.focus();row.scrollIntoView({behavior:'smooth',block:'center'});} }
 function mkSlot(si,d){
-  d=d||{};
-  var si1=si+1; // numeric slot number – pre-computed to ensure integer arithmetic in template strings
-  var nm=d.name||('Slot '+(si+1));
-  var en=d.enabled!==false?'checked':'';
-  var tr=d.triggerType||0;
-  var hr=d.fixedHour!=null?d.fixedHour:6; var mn=d.fixedMinute!=null?d.fixedMinute:0;
+  d=d||{}; var si1=si+1; var nm=d.name||('Slot '+si1); var en=d.enabled!==false?'checked':''; var tr=d.triggerType||0;
+  var hr=d.fixedHour!=null?d.fixedHour:6, mn=d.fixedMinute!=null?d.fixedMinute:0;
   var timVal=(hr<10?'0':'')+hr+':'+(mn<10?'0':'')+mn;
-  var offMin=d.offsetMinutes||0; var offBase=d.offsetBase||0;
-  var days=d.days!=null?d.days:0x7F;
-  var daysHtml='';
-  for(var dd=0;dd<7;dd++){
-    var c=(days&(1<<dd))?'checked':'';
-    daysHtml+='<label style="margin-right:7px"><input type="checkbox" name="s'+si+'_d'+dd+'" '+c+'> '+dayL[dd]+'</label>';
-  }
-  var trOpts='';
-  var trNames=['Feste Uhrzeit','Sonnenaufgang','Sonnenuntergang','Mittagszeit','Offset (relativ)'];
-  for(var t=0;t<5;t++) trOpts+='<option value="'+t+'"'+(tr===t?' selected':'')+'>'+trNames[t]+'</option>';
-  var baseNames=['Sonnenaufgang','Sonnenuntergang','Mittagszeit'];
-  var baseOpts='';
-  for(var b=0;b<3;b++) baseOpts+='<option value="'+b+'"'+(offBase===b?' selected':'')+'>'+baseNames[b]+'</option>';
+  var offMin=d.offsetMinutes||0, offBase=d.offsetBase||0, days=d.days!=null?d.days:0x7F;
+  var daysHtml=''; for(var dd=0;dd<7;dd++){var c=(days&(1<<dd))?'checked':''; daysHtml+='<label style=\"margin-right:7px\"><input type=\"checkbox\" name=\"s'+si+'_d'+dd+'\" '+c+'> '+dayL[dd]+'</label>';}
+  var trNames=['Feste Uhrzeit','Sonnenaufgang','Sonnenuntergang','Mittagszeit','Offset (relativ)'], trOpts=''; for(var t=0;t<5;t++) trOpts+='<option value=\"'+t+'\"'+(tr===t?' selected':'')+'>'+trNames[t]+'</option>';
+  var baseNames=['Sonnenaufgang','Sonnenuntergang','Mittagszeit'], baseOpts=''; for(var b=0;b<3;b++) baseOpts+='<option value=\"'+b+'\"'+(offBase===b?' selected':'')+'>'+baseNames[b]+'</option>';
   var offDisp=(tr===4)?'flex':'none';
-  return '<div class="pump-entry" id="slot'+si+'" style="border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-    +'<b style="font-size:1.05em">&#128337; '+si1+' &ndash; '+nm+'</b>'
-    +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
-    +'<button type="button" onclick="editSlot('+si+')" style="padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9998; Bearbeiten</button>'
-    +'<button type="button" onclick="deleteSlot('+si+')" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div></div>'
-    +'<div id="slotBody'+si+'" style="display:block">'
-    +'<div class="form-row">'
-    +'<div class="form-col"><label><input type="checkbox" name="s'+si+'_enabled" '+en+'> Aktiv</label></div>'
-    +'<div class="form-col"><label>Name</label><input type="text" name="s'+si+'_name" value="'+nm+'" maxlength="31" oninput="updateSlotHeading('+si1+',this)" required></div>'
-    +'</div>'
-    +'<div class="form-row">'
-    +'<div class="form-col"><label>Ausl&ouml;ser</label><select name="s'+si+'_trigger" onchange="onTriggerChange('+si+',this.value)">'+trOpts+'</select></div>'
-    +'<div class="form-col"><label>Uhrzeit / Fallback</label><input type="time" name="s'+si+'_time" value="'+timVal+'"></div>'
-    +'</div>'
-    +'<div id="offsetRow'+si+'" style="display:'+offDisp+'" class="form-row">'
-    +'<div class="form-col"><label>Offset-Basis</label><select name="s'+si+'_offsetBase">'+baseOpts+'</select></div>'
-    +'<div class="form-col"><label>Offset (Min., negativ = davor, positiv = danach)</label><input type="number" name="s'+si+'_offsetMin" value="'+offMin+'" min="-720" max="720"></div>'
-    +'</div>'
-    +'<div style="margin-top:6px">'+daysHtml+'</div>'
-    +'<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:bold;color:#1a6b3c">&#127777;&#65039; Wetterbedingungen</summary>'
-    +'<div class="form-row" style="margin-top:6px">'
-    +'<div class="form-col"><label>Aussetzen wenn Regen &ge; (mm, 0=aus)</label><input type="number" name="s'+si+'_skipRainMm" value="'+(d.skipIfRainMm||0)+'" min="0" max="100" step="0.1"></div>'
-    +'<div class="form-col"><label>Aussetzen wenn Regenwahrsch. &ge; (%, 0=aus)</label><input type="number" name="s'+si+'_skipRainPct" value="'+(d.skipIfRainPct||0)+'" min="0" max="100"></div>'
-    +'</div><div class="form-row">'
-    +'<div class="form-col"><label>Nur wenn Temp. &ge; (°C, -99=immer)</label><input type="number" name="s'+si+'_aboveTemp" value="'+(d.runOnlyAboveTemp||(-99))+'" min="-99" max="60" step="0.5"></div>'
-    +'<div class="form-col"><label>Dauer red. wenn Regen &ge; (mm, 0=aus)</label><input type="number" name="s'+si+'_reduceRainMm" value="'+(d.reduceIfRainMm||0)+'" min="0" max="100" step="0.1"></div>'
-    +'</div><div class="form-row">'
-    +'<div class="form-col"><label>Dauer-Reduktion (%)</label><input type="number" name="s'+si+'_reducePct" value="'+(d.reducePct||50)+'" min="1" max="99"></div>'
-    +'</div></details>'
-    +'<div style="margin-top:10px"><b>Schritt 2: &#128167; Pumpenzuweisungen</b>'
-    +'<div id="assigns'+si+'"></div>'
-    +'<input type="hidden" id="aCount'+si+'" name="s'+si+'_assignCount" value="0">'
-    +(pumpCount>0?'<button type="button" onclick="addAssign('+si+')" style="margin-top:6px;padding:4px 12px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer">+ Pumpe hinzuf&#252;gen</button>':'<p style="color:#dc3545;font-size:13px">&#x26A0; Zuerst Pumpen in der Hardware-Konfiguration anlegen.</p>')
-    +'</div></div></div>';
+  return '<div class=\"pump-entry\" id=\"slot'+si+'\" style=\"border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9\">'
+    +'<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px\"><b style=\"font-size:1.05em\">&#128337; '+si1+' &ndash; '+nm+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editSlot('+si+')\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteSlot('+si+')\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
+    +'<div id=\"slotBody'+si+'\" style=\"display:block\"><div class=\"form-row\"><div class=\"form-col\"><label><input type=\"checkbox\" name=\"s'+si+'_enabled\" '+en+'> Aktiv</label></div><div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"s'+si+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateSlotHeading('+si+',this)\" required></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label>Ausl&ouml;ser</label><select name=\"s'+si+'_trigger\" onchange=\"onTriggerChange('+si+',this.value)\">'+trOpts+'</select></div><div class=\"form-col\"><label>Uhrzeit / Fallback</label><input type=\"time\" name=\"s'+si+'_time\" value=\"'+timVal+'\"></div></div>'
+    +'<div id=\"offsetRow'+si+'\" style=\"display:'+offDisp+'\" class=\"form-row\"><div class=\"form-col\"><label>Offset-Basis</label><select name=\"s'+si+'_offsetBase\">'+baseOpts+'</select></div><div class=\"form-col\"><label>Offset (Min., negativ = davor, positiv = danach)</label><input type=\"number\" name=\"s'+si+'_offsetMin\" value=\"'+offMin+'\" min=\"-720\" max=\"720\"></div></div>'
+    +'<div style=\"margin-top:6px\">'+daysHtml+'</div>'
+    +'<details style=\"margin-top:8px\"><summary style=\"cursor:pointer;font-weight:bold;color:#1a6b3c\">&#127777;&#65039; Wetterbedingungen</summary>'
+    +'<div class=\"form-row\" style=\"margin-top:6px\"><div class=\"form-col\"><label>Aussetzen wenn Regen &ge; (mm, 0=aus)</label><input type=\"number\" name=\"s'+si+'_skipRainMm\" value=\"'+(d.skipIfRainMm||0)+'\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Aussetzen wenn Regenwahrsch. &ge; (%, 0=aus)</label><input type=\"number\" name=\"s'+si+'_skipRainPct\" value=\"'+(d.skipIfRainPct||0)+'\" min=\"0\" max=\"100\"></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label>Nur wenn Temp. &ge; (°C, -99=immer)</label><input type=\"number\" name=\"s'+si+'_aboveTemp\" value=\"'+(d.runOnlyAboveTemp||(-99))+'\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\"><label>Dauer red. wenn Regen &ge; (mm, 0=aus)</label><input type=\"number\" name=\"s'+si+'_reduceRainMm\" value=\"'+(d.reduceIfRainMm||0)+'\" min=\"0\" max=\"100\" step=\"0.1\"></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label>Dauer-Reduktion (%)</label><input type=\"number\" name=\"s'+si+'_reducePct\" value=\"'+(d.reducePct||50)+'\" min=\"1\" max=\"99\"></div></div></details></div></div>';
 }
-function prepareSubmit(){
-  // Use highest allocated index so deleted holes are preserved and can be skipped server-side.
-  document.getElementById('slotCount').value=_nextSlotIdx;
+function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('assignCount').value=_nextAssignIdx; }
+</script>
+)rawhtml";
+
+// ─── Watering Simulation/Test Page ────────────────────────────────────────────
+// Token: {slot_options_json}
+
+const char HTML_WATERING_TEST_PAGE[] PROGMEM = R"rawhtml(
+<div class="card">
+  <h1>&#129514; Bew&#228;sserung testen / simulieren</h1>
+  <div class="alert-info">
+    Nutzt exakt die gleiche Entscheidungs-Engine wie der Livebetrieb, aber ohne Hardware-Ausgabe.
+  </div>
+  <div class="form-row">
+    <div class="form-col"><label>Slot</label><select id="slotIndex"></select></div>
+    <div class="form-col"><label>Simulierte Zeit</label><input type="datetime-local" id="simTime"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-col"><label>Wetterquelle</label>
+      <select id="weatherState">
+        <option value="fresh" selected>Simuliert (frisch)</option>
+        <option value="stale">Simuliert (veraltet)</option>
+        <option value="unavailable">Nicht verfügbar</option>
+        <option value="live">Live-Cachedaten</option>
+      </select>
+    </div>
+    <div class="form-col"><label>Temperatur (°C)</label><input type="number" id="temperature" value="20" step="0.1"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-col"><label>Regen heute (mm)</label><input type="number" id="dailyPrecipMm" value="0" step="0.1"></div>
+    <div class="form-col"><label>Regenwahrscheinlichkeit heute (%)</label><input type="number" id="dailyPrecipPct" value="0" step="1" min="0" max="100"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-col"><label>Aktueller Niederschlag (mm)</label><input type="number" id="precipMm" value="0" step="0.1"></div>
+    <div class="form-col"><label>Aktuelle Niederschlagswahrscheinlichkeit (%)</label><input type="number" id="precipProb" value="0" step="1" min="0" max="100"></div>
+  </div>
+  <button class="btn" type="button" onclick="runSim()">Simulation starten</button>
+  <div id="simResult" style="margin-top:14px"></div>
+</div>
+<script>
+var slots={slot_options_json};
+(function(){
+  var s=document.getElementById('slotIndex');
+  slots.forEach(function(it){ var o=document.createElement('option'); o.value=it.idx; o.textContent=it.name; s.appendChild(o); });
+  var now=new Date(); now.setSeconds(0,0); document.getElementById('simTime').value=now.toISOString().slice(0,16);
+})();
+function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];}); }
+function runSim(){
+  var body='slotIndex='+encodeURIComponent(document.getElementById('slotIndex').value)
+    +'&simTime='+encodeURIComponent(document.getElementById('simTime').value)
+    +'&weatherState='+encodeURIComponent(document.getElementById('weatherState').value)
+    +'&temperature='+encodeURIComponent(document.getElementById('temperature').value)
+    +'&dailyPrecipMm='+encodeURIComponent(document.getElementById('dailyPrecipMm').value)
+    +'&dailyPrecipPct='+encodeURIComponent(document.getElementById('dailyPrecipPct').value)
+    +'&precipMm='+encodeURIComponent(document.getElementById('precipMm').value)
+    +'&precipProb='+encodeURIComponent(document.getElementById('precipProb').value);
+  var out=document.getElementById('simResult');
+  out.innerHTML='...';
+  fetch('/api/watering_simulate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    var color=(d.action==='skip')?'#dc3545':(d.action==='reduce'?'#d48a00':'#1a6b3c');
+    var h='<h2 style=\"margin-bottom:6px\">Ergebnis</h2>'
+      +'<div style=\"padding:10px;border:1px solid #ddd;border-radius:6px;background:#fafafa\">'
+      +'<p><b>Status:</b> <span style=\"color:'+color+'\">'+esc(d.action)+'</span></p>'
+      +'<p><b>Grund:</b> '+esc(d.reason)+'</p>'
+      +'<p><b>Wetter:</b> '+esc(d.weatherJustification||'–')+'</p>'
+      +'<p><b>Warnungen:</b> '+esc(d.warnings||'–')+'</p>'
+      +'<p><b>Triggerzeit:</b> '+esc(d.triggerTime||'–')+' | <b>Tag passt:</b> '+(d.dayMatched?'ja':'nein')+' | <b>Minute passt:</b> '+(d.triggerMatched?'ja':'nein')+'</p>'
+      +'<p><b>Gesamtdauer:</b> '+esc(d.totalDurationSec||0)+' s</p>';
+    if(d.plan && d.plan.length){
+      h+='<table><tr><th>#</th><th>Pumpe</th><th>Laufzeit</th><th>Basis</th></tr>';
+      d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td></tr>'; });
+      h+='</table>';
+    } else {
+      h+='<p style=\"color:#999\">Keine Pumpen-Ausf&#252;hrung geplant.</p>';
+    }
+    out.innerHTML=h+'</div>';
+  })
+  .catch(function(){ out.innerHTML='<p style=\"color:#dc3545\">Simulation fehlgeschlagen.</p>'; });
 }
 </script>
 )rawhtml";

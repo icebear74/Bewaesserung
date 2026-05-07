@@ -86,152 +86,58 @@ void WateringScheduler::update() {
     if (_wm) _wm->update();
 
     SlotConfig& sc = _cfg->getSlotConfig();
+    HardwareConfig& hw = _cfg->getHardwareConfig();
+    const WeatherData* weatherData = (_wm && _wm->isAvailable()) ? &_wm->getData() : nullptr;
+    bool weatherAvailable = (_wm && _wm->isAvailable());
+    bool weatherStale = (_wm && _wm->isStale());
     for (int si = 0; si < sc.slotCount; si++) {
-        const WateringSlot& slot = sc.slots[si];
-        if (!slot.enabled) continue;
+        WateringDecisionInput in;
+        in.slotConfig = &sc;
+        in.hardwareConfig = &hw;
+        in.weatherData = weatherData;
+        in.weatherAvailable = weatherAvailable;
+        in.weatherStale = weatherStale;
+        in.nowLocal = now;
+        in.slotIndex = si;
+        in.enforceDayMatch = true;
+        in.enforceTriggerMinute = true;
 
-        // Check day-of-week (0=Mon … 6=Sun, matching our bitmask)
-        int dow = (lt.tm_wday + 6) % 7;  // Sunday=0 in tm → Sunday=6 in our bitmask
-        if (!(slot.days & (1 << dow))) continue;
-
-        // Compute the expected trigger time for today
-        time_t trigTime = computeTriggerTime(slot, now);
-        if (trigTime == 0) continue;
-
-        struct tm trigTm;
-        localtime_r(&trigTime, &trigTm);
-
-        // Fire if the current minute matches the trigger minute
-        if (lt.tm_hour != trigTm.tm_hour || lt.tm_min != trigTm.tm_min) continue;
-
-        // Weather check
-        if (!shouldRunSlot(slot)) {
-            Serial.printf("[Sched] Slot '%s' skipped by weather rule.\n", slot.name);
+        WateringDecisionResult decision = WateringDecisionEngine::evaluateSlot(in);
+        if (decision.action == WATER_ACTION_SKIP) {
+            if (decision.triggerMatched) {
+                Serial.printf("[Sched] Slot '%s' skipped: %s\n",
+                              sc.slots[si].name, decision.reason);
+            }
             continue;
         }
-
-        enqueueSlot(si);
+        enqueueDecision(decision);
     }
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
-time_t WateringScheduler::computeTriggerTime(const WateringSlot& slot, time_t localNow) const {
-    // For FIXED_TIME: simply build today's local epoch at (fixedHour, fixedMinute)
-    auto buildFixed = [&]() -> time_t {
-        struct tm lt;
-        localtime_r(&localNow, &lt);
-        lt.tm_hour = slot.fixedHour;
-        lt.tm_min  = slot.fixedMinute;
-        lt.tm_sec  = 0;
-        lt.tm_isdst = -1;
-        time_t t = mktime(&lt);
-        return (t == (time_t)-1) ? 0 : t;
-    };
-
-    if (slot.triggerType == TRIGGER_FIXED_TIME) {
-        return buildFixed();
-    }
-
-    // Astronomical triggers require weather data for sunrise/sunset
-    bool haveAstro = _wm && _wm->isAvailable() &&
-                     _wm->getSunrise() != 0 && _wm->getSunset() != 0;
-
-    if (!haveAstro) {
-        // No astronomical data – fall back to the fixed clock time
-        return buildFixed();
-    }
-
-    time_t base = 0;
-    switch (slot.triggerType) {
-        case TRIGGER_SUNRISE: base = _wm->getSunrise(); break;
-        case TRIGGER_SUNSET:  base = _wm->getSunset();  break;
-        case TRIGGER_MIDDAY:  base = _wm->getMidday();  break;
-        case TRIGGER_OFFSET:
-            switch (slot.offsetBase) {
-                case OFFSET_BASE_SUNRISE: base = _wm->getSunrise(); break;
-                case OFFSET_BASE_SUNSET:  base = _wm->getSunset();  break;
-                case OFFSET_BASE_MIDDAY:  base = _wm->getMidday();  break;
-                default:                  base = _wm->getSunrise();  break;
-            }
-            return (base != 0) ? base + (time_t)slot.offsetMinutes * 60 : buildFixed();
-        default:
-            return buildFixed();
-    }
-    return (base != 0) ? base : buildFixed();
-}
-
-bool WateringScheduler::shouldRunSlot(const WateringSlot& slot) const {
-    if (!_wm || !_wm->isAvailable()) return true;  // no data → always run
-
-    const WeatherData& w = _wm->getData();
-
-    // Skip if daily expected precipitation exceeds threshold
-    if (slot.skipIfRainMm > 0.0f && w.dailyPrecipMm >= slot.skipIfRainMm) {
-        Serial.printf("[Sched] Rain %.1f mm >= skip threshold %.1f mm.\n",
-                      w.dailyPrecipMm, slot.skipIfRainMm);
-        return false;
-    }
-    // Skip if precipitation probability exceeds threshold
-    if (slot.skipIfRainPct > 0.0f && w.dailyPrecipPct >= slot.skipIfRainPct) {
-        Serial.printf("[Sched] Rain prob %.0f%% >= skip threshold %.0f%%.\n",
-                      w.dailyPrecipPct, slot.skipIfRainPct);
-        return false;
-    }
-    // Skip if temperature is below the required minimum
-    if (slot.runOnlyAboveTemp > -99.0f && w.temperature < slot.runOnlyAboveTemp) {
-        Serial.printf("[Sched] Temp %.1f°C < required %.1f°C.\n",
-                      w.temperature, slot.runOnlyAboveTemp);
-        return false;
-    }
-    return true;
-}
-
-int WateringScheduler::computeDuration(const WateringSlot& slot, int baseDuration) const {
-    if (!_wm || !_wm->isAvailable()) return baseDuration;
-    if (slot.reduceIfRainMm <= 0.0f) return baseDuration;
-
-    const WeatherData& w = _wm->getData();
-    if (w.dailyPrecipMm >= slot.reduceIfRainMm) {
-        int reduced = baseDuration * (100 - (int)slot.reducePct) / 100;
-        if (reduced < 1) reduced = 1;
-        Serial.printf("[Sched] Rain %.1f mm >= %.1f mm – duration %d→%ds (-%d%%).\n",
-                      w.dailyPrecipMm, slot.reduceIfRainMm,
-                      baseDuration, reduced, slot.reducePct);
-        return reduced;
-    }
-    return baseDuration;
-}
-
-void WateringScheduler::enqueueSlot(int slotIdx) {
-    if (!_cfg) return;
-    SlotConfig& sc     = _cfg->getSlotConfig();
-    HardwareConfig& hw = _cfg->getHardwareConfig();
-    const WateringSlot& slot = sc.slots[slotIdx];
-
+void WateringScheduler::enqueueDecision(const WateringDecisionResult& decision) {
+    if (!_cfg || decision.slotIndex < 0 || decision.slotIndex >= _cfg->getSlotConfig().slotCount) return;
+    SlotConfig& sc = _cfg->getSlotConfig();
+    const WateringSlot& slot = sc.slots[decision.slotIndex];
     int added = 0;
-    for (int ai = 0; ai < sc.assignCount; ai++) {
-        const SlotPumpAssignment& asgn = sc.assignments[ai];
-        if (asgn.slotIndex != (uint8_t)slotIdx) continue;
-        if (asgn.pumpIndex >= (uint8_t)hw.relayCount) continue;
-
-        int duration = computeDuration(slot, asgn.durationSec);
-
+    for (int i = 0; i < decision.planCount; i++) {
+        const WateringDecisionPumpPlan& pp = decision.plan[i];
         // Check queue capacity (circular buffer)
         int nextTail = (_qTail + 1) % SCHEDULER_QUEUE_SIZE;
         if (nextTail == _qHead) {
             Serial.printf("[Sched] Queue full – pump %d for slot '%s' dropped.\n",
-                          asgn.pumpIndex, slot.name);
+                          pp.pumpIndex, slot.name);
             continue;
         }
-        _queue[_qTail].pumpIndex   = asgn.pumpIndex;
-        _queue[_qTail].durationSec = duration;
-        _queue[_qTail].slotIndex   = (uint8_t)slotIdx;
+        _queue[_qTail].pumpIndex   = pp.pumpIndex;
+        _queue[_qTail].durationSec = pp.durationSec;
+        _queue[_qTail].slotIndex   = (uint8_t)decision.slotIndex;
         _qTail = nextTail;
         added++;
     }
     if (added > 0) {
-        Serial.printf("[Sched] Slot '%s' triggered – %d pump(s) queued.\n",
-                      slot.name, added);
+        Serial.printf("[Sched] Slot '%s' queued – %d pump(s), action=%d, reason=%s\n",
+                      slot.name, added, (int)decision.action, decision.reason);
     }
 }
