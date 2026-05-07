@@ -1,7 +1,15 @@
 #include "RelayManager.h"
 
 RelayManager::RelayManager() {
-    memset(_pcfOk, false, sizeof(_pcfOk));
+    memset(_pcfDevices, 0, sizeof(_pcfDevices));
+    memset(_pcfOk,      0, sizeof(_pcfOk));
+}
+
+RelayManager::~RelayManager() {
+    for (int d = 0; d < MAX_EXPANDER_COUNT; d++) {
+        delete _pcfDevices[d];
+        _pcfDevices[d] = nullptr;
+    }
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -46,11 +54,18 @@ void RelayManager::begin(HardwareConfig& config) {
 
     // ── PCF8574 / PCF8575 expanders ───────────────────────────────────────────
     // Each expander is indexed directly by its position in _config.expanders[].
-    memset(_pcfOk, false, sizeof(_pcfOk));
+    // Delete any objects from a previous begin() call and create fresh instances
+    // so that Adafruit_PCF8574::begin() always starts with i2c_dev == NULL.
+    for (int d = 0; d < MAX_EXPANDER_COUNT; d++) {
+        delete _pcfDevices[d];
+        _pcfDevices[d] = nullptr;
+        _pcfOk[d]      = false;
+    }
     for (int d = 0; d < _config.expanderCount; d++) {
         const ExpanderEntry& e = _config.expanders[d];
         if (!e.enabled) continue;
-        _pcfOk[d] = _pcfDevices[d].begin(e.i2cAddress);
+        _pcfDevices[d] = new Adafruit_PCF8574();
+        _pcfOk[d] = _pcfDevices[d]->begin(e.i2cAddress);
         if (_pcfOk[d]) {
             const char* typeName = (e.chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575" : "PCF8574";
             Serial.printf("[Relay] %s \"%s\" (0x%02X) initialized.\n",
@@ -216,7 +231,7 @@ void RelayManager::writeRelay(int index, bool on) {
         digitalWrite(p.pin, level ? HIGH : LOW);
     } else if (p.outputType == OUTPUT_TYPE_PCF8574) {
         uint8_t di = p.expanderIndex;
-        if (di >= MAX_EXPANDER_COUNT || !_pcfOk[di]) {
+        if (di >= MAX_EXPANDER_COUNT || !_pcfOk[di] || !_pcfDevices[di]) {
             Serial.printf("[Relay] writeRelay: expander %d not available.\n", di);
             return;
         }
@@ -226,6 +241,6 @@ void RelayManager::writeRelay(int index, bool on) {
                           p.i2cChannel, di);
             return;
         }
-        _pcfDevices[di].digitalWrite(p.i2cChannel, level);
+        _pcfDevices[di]->digitalWrite(p.i2cChannel, level);
     }
 }
