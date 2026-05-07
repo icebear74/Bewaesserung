@@ -23,7 +23,7 @@ bool Pcf857xDevice::digitalWrite(uint8_t channel, bool level) {
     if (level) {
         _state |= mask;
     } else {
-        _state &= (uint16_t)~mask;
+        _state &= ~mask;
     }
     return writeState();
 }

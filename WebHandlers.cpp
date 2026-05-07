@@ -388,6 +388,8 @@ static void handleSaveLocation() {
     if (g_server->hasArg("locationName")) strlcpy(cfg.locationName, g_server->arg("locationName").c_str(), sizeof(cfg.locationName));
     g_app->getConfigManager()->saveDeviceConfig();
 
+    // Ignore tiny float round-trip differences from the form; ~5 m is still the
+    // same practical location for weather forecast purposes.
     static const float LOCATION_EPSILON = 0.00005f;
     bool locationChanged = (fabsf(cfg.latitude - oldLatitude) > LOCATION_EPSILON) ||
                            (fabsf(cfg.longitude - oldLongitude) > LOCATION_EPSILON);
