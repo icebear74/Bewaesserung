@@ -102,6 +102,10 @@ void Application::update() {
 
     _wifiManager->update();
 
+    if (_relayManager) {
+        _relayManager->update();
+    }
+
     if (_timeSync) {
         _timeSync->update();
     }
