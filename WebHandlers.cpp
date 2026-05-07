@@ -787,7 +787,7 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "</div>";
     char summaryBuf[220];
     snprintf(summaryBuf, sizeof(summaryBuf),
-             "Ausloeser: %s | Zeit/Fallback: %02u:%02u | Skip Regen: %.1fmm / %.0f%% | Min. Temp: %.1fC | Reduktion: %.1fmm -> -%u%%",
+             "Auslöser: %s | Zeit/Fallback: %02u:%02u | Skip Regen: %.1fmm / %.0f%% | Min. Temp: %.1fC | Reduktion: %.1fmm -> -%u%%",
              trigLabels[slot.triggerType], slot.fixedHour, slot.fixedMinute,
              slot.skipIfRainMm, slot.skipIfRainPct, slot.runOnlyAboveTemp,
              slot.reduceIfRainMm, slot.reducePct);

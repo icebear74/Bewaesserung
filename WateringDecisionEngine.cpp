@@ -94,7 +94,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
                                          input.weatherAvailable,
                                          &out.usedFallbackTime);
     if (out.triggerTime == 0) {
-        setText(out.reason, sizeof(out.reason), "Auslösezeit konnte nicht berechnet werden.");
+        setText(out.reason, sizeof(out.reason), "Auslöserzeit konnte nicht berechnet werden.");
         return out;
     }
 
