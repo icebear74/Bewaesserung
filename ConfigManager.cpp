@@ -11,7 +11,7 @@ void ConfigManager::begin() {
     }
     loadDeviceConfig();
     loadHardwareConfig();
-    loadWateringConfig();
+    loadSlotConfig();
 }
 
 // ─── Device Config ────────────────────────────────────────────────────────────
@@ -231,13 +231,14 @@ bool ConfigManager::saveHardwareConfig() {
     return true;
 }
 
-// ─── Watering Config ──────────────────────────────────────────────────────────
+// ─── Slot Config (new watering schedule model) ────────────────────────────────
 
-bool ConfigManager::loadWateringConfig() {
+bool ConfigManager::loadSlotConfig() {
+    _slotConfig = SlotConfig{};  // reset to defaults
+
     File f = LittleFS.open("/watering.json", "r");
     if (!f) {
         Serial.println("[Config] /watering.json not found, watering locked.");
-        _wateringConfig.count = 0;
         return false;
     }
     JsonDocument doc;
@@ -245,51 +246,130 @@ bool ConfigManager::loadWateringConfig() {
     f.close();
     if (err) {
         Serial.printf("[Config] /watering.json parse error: %s\n", err.c_str());
-        _wateringConfig.count = 0;
         return false;
     }
-    _wateringConfig.count = 0;
-    JsonArray entries = doc["entries"].as<JsonArray>();
-    for (JsonObject e : entries) {
-        if (_wateringConfig.count >= MAX_WATERING_ENTRIES) break;
-        WateringEntry& we = _wateringConfig.entries[_wateringConfig.count++];
-        we.relay       = e["relay"]       | 0;
-        we.hour        = e["hour"]        | 0;
-        we.minute      = e["minute"]      | 0;
-        we.durationSec = e["durationSec"] | 0;
-        we.active      = e["active"]      | true;
-        we.days        = e["days"]        | 0x7F;
+
+    // ── New format: slots + assignments ──────────────────────────────────────
+    if (doc["slots"].is<JsonArray>()) {
+        JsonArray sArr = doc["slots"].as<JsonArray>();
+        int sc = min((int)sArr.size(), MAX_SLOTS);
+        _slotConfig.slotCount = sc;
+        for (int i = 0; i < sc; i++) {
+            WateringSlot& s = _slotConfig.slots[i];
+            s = WateringSlot{};
+            JsonObject so = sArr[i].as<JsonObject>();
+            strlcpy(s.name, so["name"] | "", sizeof(s.name));
+            s.enabled         = so["enabled"]       | true;
+            s.triggerType     = (uint8_t)constrain((int)(so["triggerType"] | 0), 0, 4);
+            s.fixedHour       = (uint8_t)constrain((int)(so["fixedHour"]   | 6), 0, 23);
+            s.fixedMinute     = (uint8_t)constrain((int)(so["fixedMinute"] | 0), 0, 59);
+            s.offsetMinutes   = (int16_t)constrain((int)(so["offsetMinutes"] | 0), -720, 720);
+            s.offsetBase      = (uint8_t)constrain((int)(so["offsetBase"] | 0), 0, 2);
+            s.days            = (uint8_t)(so["days"] | 0x7F);
+            s.skipIfRainMm    = so["skipIfRainMm"]   | 0.0f;
+            s.skipIfRainPct   = so["skipIfRainPct"]  | 0.0f;
+            s.runOnlyAboveTemp= so["runOnlyAboveTemp"]| -99.0f;
+            s.reduceIfRainMm  = so["reduceIfRainMm"] | 0.0f;
+            s.reducePct       = (uint8_t)constrain((int)(so["reducePct"] | 50), 1, 99);
+        }
+
+        if (doc["assignments"].is<JsonArray>()) {
+            JsonArray aArr = doc["assignments"].as<JsonArray>();
+            int ac = min((int)aArr.size(), MAX_SLOT_ASSIGNMENTS);
+            _slotConfig.assignCount = ac;
+            for (int j = 0; j < ac; j++) {
+                SlotPumpAssignment& a = _slotConfig.assignments[j];
+                a = SlotPumpAssignment{};
+                JsonObject ao = aArr[j].as<JsonObject>();
+                a.slotIndex   = (uint8_t)constrain((int)(ao["slotIndex"]   | 0), 0, MAX_SLOTS - 1);
+                a.pumpIndex   = (uint8_t)constrain((int)(ao["pumpIndex"]   | 0), 0, MAX_RELAY_COUNT - 1);
+                a.durationSec = constrain((int)(ao["durationSec"] | 60), 1, 7200);
+            }
+        }
+        Serial.printf("[Config] Slot config loaded: %d slots, %d assignments.\n",
+                      _slotConfig.slotCount, _slotConfig.assignCount);
+        return true;
     }
-    Serial.printf("[Config] Watering config loaded: %d entries.\n", _wateringConfig.count);
-    return true;
+
+    // ── Old format (entries[]): migrate to slot model ─────────────────────────
+    if (doc["entries"].is<JsonArray>()) {
+        JsonArray entries = doc["entries"].as<JsonArray>();
+        for (JsonObject e : entries) {
+            if (_slotConfig.slotCount >= MAX_SLOTS) break;
+            if (_slotConfig.assignCount >= MAX_SLOT_ASSIGNMENTS) break;
+
+            int si = _slotConfig.slotCount++;
+            WateringSlot& s = _slotConfig.slots[si];
+            s = WateringSlot{};
+            char nameBuf[32];
+            snprintf(nameBuf, sizeof(nameBuf), "Schaltzeit %d", si + 1);
+            strlcpy(s.name, nameBuf, sizeof(s.name));
+            s.enabled     = e["active"] | true;
+            s.triggerType = TRIGGER_FIXED_TIME;
+            s.fixedHour   = (uint8_t)constrain((int)(e["hour"]   | 6), 0, 23);
+            s.fixedMinute = (uint8_t)constrain((int)(e["minute"] | 0), 0, 59);
+            s.days        = (uint8_t)(e["days"] | 0x7F);
+
+            int aj = _slotConfig.assignCount++;
+            SlotPumpAssignment& a = _slotConfig.assignments[aj];
+            a.slotIndex   = (uint8_t)si;
+            a.pumpIndex   = (uint8_t)constrain((int)(e["relay"]       | 0), 0, MAX_RELAY_COUNT - 1);
+            a.durationSec = constrain((int)(e["durationSec"] | 60), 1, 7200);
+        }
+        Serial.printf("[Config] Old watering format migrated: %d slot(s).\n", _slotConfig.slotCount);
+        // Save in new format immediately so migration runs only once
+        saveSlotConfig();
+        return true;
+    }
+
+    Serial.println("[Config] /watering.json: no recognisable data.");
+    return false;
 }
 
-bool ConfigManager::saveWateringConfig() {
+bool ConfigManager::saveSlotConfig() {
     File f = LittleFS.open("/watering.json", "w");
     if (!f) {
         Serial.println("[Config] Cannot write /watering.json");
         return false;
     }
     JsonDocument doc;
-    JsonArray entries = doc["entries"].to<JsonArray>();
-    for (int i = 0; i < _wateringConfig.count; i++) {
-        WateringEntry& we = _wateringConfig.entries[i];
-        JsonObject e = entries.add<JsonObject>();
-        e["relay"]       = we.relay;
-        e["hour"]        = we.hour;
-        e["minute"]      = we.minute;
-        e["durationSec"] = we.durationSec;
-        e["active"]      = we.active;
-        e["days"]        = we.days;
+    JsonArray sArr = doc["slots"].to<JsonArray>();
+    for (int i = 0; i < _slotConfig.slotCount; i++) {
+        const WateringSlot& s = _slotConfig.slots[i];
+        JsonObject so = sArr.add<JsonObject>();
+        so["name"]           = s.name;
+        so["enabled"]        = s.enabled;
+        so["triggerType"]    = s.triggerType;
+        so["fixedHour"]      = s.fixedHour;
+        so["fixedMinute"]    = s.fixedMinute;
+        so["offsetMinutes"]  = s.offsetMinutes;
+        so["offsetBase"]     = s.offsetBase;
+        so["days"]           = s.days;
+        so["skipIfRainMm"]   = s.skipIfRainMm;
+        so["skipIfRainPct"]  = s.skipIfRainPct;
+        so["runOnlyAboveTemp"] = s.runOnlyAboveTemp;
+        so["reduceIfRainMm"] = s.reduceIfRainMm;
+        so["reducePct"]      = s.reducePct;
+    }
+    JsonArray aArr = doc["assignments"].to<JsonArray>();
+    for (int j = 0; j < _slotConfig.assignCount; j++) {
+        const SlotPumpAssignment& a = _slotConfig.assignments[j];
+        JsonObject ao = aArr.add<JsonObject>();
+        ao["slotIndex"]   = a.slotIndex;
+        ao["pumpIndex"]   = a.pumpIndex;
+        ao["durationSec"] = a.durationSec;
     }
     serializeJson(doc, f);
     f.close();
-    Serial.println("[Config] Watering config saved.");
+    Serial.printf("[Config] Slot config saved: %d slot(s), %d assignment(s).\n",
+                  _slotConfig.slotCount, _slotConfig.assignCount);
     return true;
 }
 
 bool ConfigManager::isWateringConfigValid() const {
-    return _wateringConfig.count > 0 && _hardwareConfig.relayCount > 0;
+    return _slotConfig.slotCount > 0 &&
+           _slotConfig.assignCount > 0 &&
+           _hardwareConfig.relayCount > 0;
 }
 
 bool ConfigManager::resetAll() {
@@ -300,7 +380,9 @@ bool ConfigManager::resetAll() {
     // Reinitialise to defaults
     _deviceConfig   = DeviceConfig{};
     _hardwareConfig = HardwareConfig{};
-    _wateringConfig = WateringConfig{};
+    _slotConfig     = SlotConfig{};
     Serial.println("[Config] All configs reset to defaults.");
     return ok;
 }
+
+// (end of ConfigManager.cpp)

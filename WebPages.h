@@ -65,43 +65,59 @@ const char HTML_FOOTER[] PROGMEM = R"rawhtml(
 // Placeholders: {ds3231_warning} {watering_locked_warning} {wifi_status}
 //               {ip_address} {time_str} {uptime} {state_str}
 //               {ds3231_status} {offline_mode} {rtc_temp}
+//               {pump_status_html} {weather_html}
 
 const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
-  <h1>📊 Systemstatus</h1>
+  <h1>&#128202; Systemstatus</h1>
   {ds3231_warning}
   {watering_locked_warning}
-  <table>
-    <tr><th>Parameter</th><th>Wert</th></tr>
-    <tr><td>Systemzustand</td><td><b>{state_str}</b></td></tr>
-    <tr><td>WLAN-Status</td><td>{wifi_status}</td></tr>
-    <tr><td>IP-Adresse</td><td>{ip_address}</td></tr>
-    <tr><td>Lokale Zeit</td><td>{time_str}</td></tr>
-    <tr><td>Betriebszeit</td><td>{uptime}</td></tr>
-    <tr><td>DS3231 RTC</td><td>{ds3231_status}</td></tr>
-    <tr><td>RTC Temperatur</td><td>{rtc_temp}</td></tr>
-    <tr><td>Offline-Modus</td><td>{offline_mode}</td></tr>
-  </table>
+  <div style="display:flex;gap:16px;flex-wrap:wrap">
+    <div style="flex:1;min-width:240px">
+      <h2 style="margin-bottom:8px">&#128421;&#65039; System</h2>
+      <table>
+        <tr><td>Systemzustand</td><td><b>{state_str}</b></td></tr>
+        <tr><td>WLAN-Status</td><td>{wifi_status}</td></tr>
+        <tr><td>IP-Adresse</td><td>{ip_address}</td></tr>
+        <tr><td>Lokale Zeit</td><td>{time_str}</td></tr>
+        <tr><td>Betriebszeit</td><td>{uptime}</td></tr>
+        <tr><td>DS3231 RTC</td><td>{ds3231_status}</td></tr>
+        <tr><td>RTC Temperatur</td><td>{rtc_temp}</td></tr>
+        <tr><td>Offline-Modus</td><td>{offline_mode}</td></tr>
+      </table>
+    </div>
+    <div style="flex:1;min-width:240px">
+      {pump_status_html}
+    </div>
+  </div>
+  {weather_html}
+  <p style="margin-top:14px">
+    <a class="btn" href="/config_watering" style="font-size:13px;padding:7px 16px">&#128167; Bew&auml;sserung konfigurieren</a>
+    <a class="btn" href="/config_hardware" style="font-size:13px;padding:7px 16px;margin-left:6px">&#9881;&#65039; Hardware</a>
+  </p>
+  <script>setTimeout(function(){window.location.reload();},30000);</script>
 </div>
 )rawhtml";
 
 // ─── WiFi Config Page ─────────────────────────────────────────────────────────
+// Token {password_field}: rendered server-side – plain text on first setup,
+// masked on subsequent visits.
 
 const char HTML_WIFI_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
-  <h1>📶 WLAN-Konfiguration</h1>
+  <h1>&#128246; WLAN-Konfiguration</h1>
   <div class="alert-info">
-    ℹ️ Nach dem Speichern der WLAN-Einstellungen startet das Gerät neu und verbindet sich mit dem neuen Netzwerk.
+    &#8505;&#65039; Nach dem Speichern der WLAN-Einstellungen startet das Ger&#228;t neu und verbindet sich mit dem neuen Netzwerk.
   </div>
   <form method="POST" action="/save_wifi">
     <label for="ssid">WLAN-Name (SSID)</label>
     <input type="text" id="ssid" name="ssid" value="{ssid}" placeholder="Ihr WLAN-Name" maxlength="63">
     <label for="password">Passwort</label>
-    <input type="password" id="password" name="password" value="{password}" placeholder="WLAN-Passwort" maxlength="63">
-    <label for="hostname">Gerätename (Hostname)</label>
+    {password_field}
+    <label for="hostname">Ger&#228;tename (Hostname)</label>
     <input type="text" id="hostname" name="hostname" value="{hostname}" placeholder="Bewaesserung" maxlength="31">
     <div style="margin-top:8px">
-      <button class="btn" type="submit">💾 Speichern &amp; Neu starten</button>
+      <button class="btn" type="submit">&#128190; Speichern &amp; Neu starten</button>
     </div>
   </form>
 </div>
@@ -181,13 +197,13 @@ var map, marker;
   marker = L.marker([lat,lng],{draggable:true}).addTo(map);
   marker.on('dragend',function(e){
     var pos = e.target.getLatLng();
-    document.getElementById('latitude').value = pos.lat.toFixed(6);
-    document.getElementById('longitude').value = pos.lng.toFixed(6);
+    document.getElementById('latitude').value = pos.lat.toFixed(4);
+    document.getElementById('longitude').value = pos.lng.toFixed(4);
   });
   map.on('click',function(e){
     marker.setLatLng(e.latlng);
-    document.getElementById('latitude').value = e.latlng.lat.toFixed(6);
-    document.getElementById('longitude').value = e.latlng.lng.toFixed(6);
+    document.getElementById('latitude').value = e.latlng.lat.toFixed(4);
+    document.getElementById('longitude').value = e.latlng.lng.toFixed(4);
   });
 })();
 function searchLocation(){
@@ -202,8 +218,8 @@ function searchLocation(){
     if(data && data.length > 0){
       var lat = parseFloat(data[0].lat);
       var lon = parseFloat(data[0].lon);
-      document.getElementById('latitude').value = lat.toFixed(6);
-      document.getElementById('longitude').value = lon.toFixed(6);
+      document.getElementById('latitude').value = lat.toFixed(4);
+      document.getElementById('longitude').value = lon.toFixed(4);
       var displayName = data[0].name || (data[0].display_name||'').split(',')[0];
       if(!document.getElementById('locationName').value)
         document.getElementById('locationName').value = displayName;
@@ -255,10 +271,13 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
     <h2 style="margin-top:22px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
       &#128167; Pumpen
     </h2>
-    <label for="pumpCount">Anzahl Pumpen (0&#x2013;8)</label>
-    <input type="number" id="pumpCount" name="pumpCount" value="{pumpCount}"
-           min="0" max="8" onchange="rebuildPumps(this.value)">
+    <input type="hidden" id="pumpCount" name="pumpCount" value="{pumpCount}">
     <div id="pumpRows">{pump_rows_html}</div>
+    <div id="noPumpsMsg" style="display:{noPumpsMsg}color:#999;font-style:italic;margin-bottom:8px">
+      Noch keine Pumpe angelegt. Pumpe hinzuf&#252;gen &#8594;
+    </div>
+    <button type="button" class="btn" onclick="addPump()"
+            style="margin-bottom:14px;background:#17a2b8">+ Pumpe hinzuf&#252;gen</button>
 
     <div style="margin-top:14px">
       <button class="btn" type="submit">&#128190; Speichern</button>
@@ -267,9 +286,10 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
 </div>
 <script>
 var _exp={expanders_json};
+var _nextPumpIdx={pumpCount};
 function _expLabel(e){return e.name+' ('+e.addr+', '+(e.chipType===1?'PCF8575':'PCF8574')+')';}
 function _expOptions(selIdx){
-  if(!_exp.length) return '<option value="0" disabled>&#x26A0; Kein Expander – zuerst oben anlegen</option>';
+  if(!_exp.length) return '<option value="0" disabled>&#x26A0; Kein Expander &#x2013; zuerst oben anlegen</option>';
   var s='';
   for(var i=0;i<_exp.length;i++){
     s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+_expLabel(_exp[i])+'</option>';
@@ -350,9 +370,13 @@ function mkRow(i,d){
   var maxChan=(_exp[expIdx]&&_exp[expIdx].chipType===1)?15:7;
   var gpioDisp=t===0?'block':'none';
   var i2cDisp=t===1?'block':'none';
-  return '<div class="pump-entry" style="border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px">'
-  +'<b>Pumpe '+(i+1)+'</b>'
-  +'<div class="form-row" style="margin-top:6px">'
+  return '<div class="pump-entry" id="prow'+i+'" style="border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px">'
+  +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+  +'<b>Pumpe #'+(i+1)+'</b>'
+  +'<button type="button" onclick="deletePump('+i+')" '
+  +'style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">'
+  +'&#10005; L&#246;schen</button></div>'
+  +'<div class="form-row">'
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_enabled" '+e+'> Aktiv</label></div>'
   +'<div class="form-col"><label>Name</label><input type="text" name="p'+i+'_name" value="'+nm+'" maxlength="31"></div>'
   +'</div><div class="form-row">'
@@ -381,30 +405,19 @@ function mkRow(i,d){
   +' <span id="ts'+i+'" style="font-size:12px;color:#555"></span>'
   +'</div></div>';
 }
-function rebuildPumps(n){
-  n=parseInt(n)||0;
-  var div=document.getElementById('pumpRows');
-  var html='';
-  for(var i=0;i<n;i++){
-    var typeEl=div.querySelector('[name="p'+i+'_type"]');
-    if(typeEl){
-      var t=parseInt(typeEl.value)||0;
-      html+=mkRow(i,{
-        enabled:getChk(div,'[name="p'+i+'_enabled"]'),
-        name:getVal(div,'[name="p'+i+'_name"]'),
-        outputType:t,
-        pin:parseInt(getVal(div,'[name="p'+i+'_pin"]')||'-1'),
-        expanderIndex:parseInt(getVal(div,'[name="p'+i+'_expander"]')||'0'),
-        i2cChannel:parseInt(getVal(div,'[name="p'+i+'_i2cChan"]')||'0'),
-        invertLogic:getChk(div,'[name="p'+i+'_invert"]'),
-        maxRuntimeSec:parseInt(getVal(div,'[name="p'+i+'_maxRuntime"]')||'300'),
-        notes:getVal(div,'[name="p'+i+'_notes"]')
-      });
-    }else{
-      html+=mkRow(i,{pin:-1,maxRuntimeSec:300,enabled:true});
-    }
-  }
-  div.innerHTML=html;
+function addPump(){
+  var i=_nextPumpIdx++;
+  document.getElementById('pumpRows').insertAdjacentHTML('beforeend',mkRow(i,{pin:-1,maxRuntimeSec:300,enabled:true}));
+  document.getElementById('pumpCount').value=_nextPumpIdx;
+  document.getElementById('noPumpsMsg').style.display='none';
+}
+function deletePump(i){
+  var el=document.getElementById('prow'+i);
+  if(el)el.remove();
+  // Recalculate pumpCount from remaining visible pump rows; unused indices just become empty on next save
+  var rows=document.querySelectorAll('[id^="prow"]');
+  document.getElementById('pumpCount').value=_nextPumpIdx; // server scans for present fields
+  if(rows.length===0)document.getElementById('noPumpsMsg').style.display='block';
 }
 function testRelay(idx,action){
   var sp=document.getElementById('ts'+idx);
@@ -418,65 +431,137 @@ function testRelay(idx,action){
 )rawhtml";
 
 // ─── Watering Config Page ─────────────────────────────────────────────────────
-// Tokens: {watering_status} {relayCount} {relay_names_json} {nextIdx} {entry_rows_html}
+// Tokens: {watering_status} {pumpCount} {pump_names_json} {slotCount} {slot_rows_html}
 
 const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#128167; Bew&#228;sserungsplan</h1>
   {watering_status}
-  <form method="POST" action="/save_watering" id="wf">
-    <div id="entries">{entry_rows_html}</div>
-    <div style="margin-top:10px;display:flex;gap:8px">
-      <button type="button" class="btn" onclick="addEntry()" style="background:#17a2b8">+ Eintrag hinzuf&#252;gen</button>
+  <div class="alert-info">
+    &#128161; Slots definieren <b>wann</b> bew&#228;ssert wird (Ausl&#246;ser + Wetterbedingungen).<br>
+    Jeder Slot kann mehreren Pumpen zugewiesen werden &#8211; jede Pumpe l&#228;uft <b>sequenziell</b> (nie gleichzeitig).
+  </div>
+  <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
+    <input type="hidden" id="slotCount" name="slotCount" value="{slotCount}">
+    <div id="slots">{slot_rows_html}</div>
+    <div id="noSlotsMsg" style="display:{noSlotsMsg}color:#999;font-style:italic;margin-bottom:8px">
+      Noch kein Slot angelegt. Slot hinzuf&#252;gen &#8594;
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" class="btn" onclick="addSlot()" style="background:#17a2b8">+ Slot hinzuf&#252;gen</button>
       <button class="btn" type="submit">&#128190; Speichern</button>
     </div>
   </form>
 </div>
 <script>
-var relayCount={relayCount};
-var relayNames={relay_names_json};
-var nextIdx={nextIdx};
+var pumpCount={pumpCount};
+var pumpNames={pump_names_json};
+var _nextSlotIdx={slotCount};
 var dayL=['Mo','Di','Mi','Do','Fr','Sa','So'];
-function pad(n){return n<10?'0'+n:''+n;}
-function daysHtml(days,i){
+function pumpOpts(selIdx){
+  if(pumpCount===0) return '<option value="0" disabled>&#x26A0; Keine Pumpen konfiguriert</option>';
   var s='';
-  for(var d=0;d<7;d++){
-    var c=(days&(1<<d))?'checked':'';
-    s+='<label style="margin-right:7px"><input type="checkbox" name="e'+i+'_d'+d+'" '+c+'> '+dayL[d]+'</label>';
+  for(var i=0;i<pumpCount;i++){
+    s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+(pumpNames[i]||'Pumpe '+(i+1))+'</option>';
   }
   return s;
 }
-function relayOpts(sel){
-  var s='';
-  for(var r=0;r<relayCount;r++){
-    s+='<option value="'+r+'"'+(sel===r?' selected':'')+'>'+(relayNames[r]||'Pumpe '+(r+1))+'</option>';
-  }
-  return s;
+function onTriggerChange(si,v){
+  var row=document.getElementById('offsetRow'+si);
+  if(row) row.style.display=(v==='4')?'flex':'none';
 }
-function mkEntry(i,d){
-  d=d||{};
-  var days=d.days!=null?d.days:0x7F;
-  var ac=d.active!==false?'checked':'';
-  var t=pad(d.hour||6)+':'+pad(d.minute||0);
-  return '<div class="pump-entry" id="e'+i+'" style="border:1px solid #ddd;padding:10px;margin-bottom:8px;border-radius:4px">'
-  +'<div class="form-row">'
-  +'<div class="form-col"><label>Pumpe</label><select name="e'+i+'_relay">'+relayOpts(d.relay||0)+'</select></div>'
-  +'<div class="form-col"><label>Startzeit</label><input type="time" name="e'+i+'_time" value="'+t+'"></div>'
-  +'<div class="form-col"><label>Dauer (s)</label><input type="number" name="e'+i+'_duration" value="'+(d.durationSec||120)+'" min="1" max="7200"></div>'
-  +'</div>'
-  +'<div style="margin-top:6px">'+daysHtml(days,i)+'</div>'
-  +'<div style="margin-top:6px">'
-  +'<label><input type="checkbox" name="e'+i+'_active" '+ac+'> Aktiv</label>'
-  +' <button type="button" onclick="delEntry('+i+')" style="margin-left:12px;padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button>'
-  +'</div></div>';
+function addSlot(){
+  var si=_nextSlotIdx++;
+  var html=mkSlot(si,{});
+  document.getElementById('slots').insertAdjacentHTML('beforeend',html);
+  document.getElementById('slotCount').value=_nextSlotIdx;
+  document.getElementById('noSlotsMsg').style.display='none';
 }
-function addEntry(){
-  if(relayCount===0){alert('Bitte zuerst Pumpen in der Hardware-Konfiguration anlegen.');return;}
-  document.getElementById('entries').insertAdjacentHTML('beforeend',mkEntry(nextIdx++,{}));
-}
-function delEntry(id){
-  var el=document.getElementById('e'+id);
+function deleteSlot(si){
+  var el=document.getElementById('slot'+si);
   if(el)el.remove();
+  // Recount visible slot divs (children of #slots container)
+  var remaining=document.getElementById('slots').querySelectorAll('.pump-entry');
+  document.getElementById('slotCount').value=remaining.length;
+  if(remaining.length===0)document.getElementById('noSlotsMsg').style.display='block';
+}
+function getAssignCount(si){
+  var el=document.getElementById('aCount'+si);
+  return el?parseInt(el.value)||0:0;
+}
+function addAssign(si){
+  if(pumpCount===0){alert('Bitte zuerst Pumpen konfigurieren.');return;}
+  var ac=getAssignCount(si);
+  var html='<div class="form-row" style="margin-top:6px;align-items:center" id="arow'+si+'_'+ac+'">'
+    +'<div class="form-col"><label>Pumpe</label><select name="a'+si+'_'+ac+'_pump">'+pumpOpts(0)+'</select></div>'
+    +'<div class="form-col"><label>Dauer (s)</label><input type="number" name="a'+si+'_'+ac+'_duration" value="60" min="1" max="7200"></div>'
+    +'<div style="padding-top:20px"><button type="button" onclick="deleteAssign('+si+','+ac+')" '
+    +'style="padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005;</button></div></div>';
+  document.getElementById('assigns'+si).insertAdjacentHTML('beforeend',html);
+  document.getElementById('aCount'+si).value=ac+1;
+}
+function deleteAssign(si,ai){
+  var el=document.getElementById('arow'+si+'_'+ai);
+  if(el)el.remove();
+}
+function mkSlot(si,d){
+  d=d||{};
+  var nm=d.name||('Slot '+(si+1));
+  var en=d.enabled!==false?'checked':'';
+  var tr=d.triggerType||0;
+  var hr=d.fixedHour!=null?d.fixedHour:6; var mn=d.fixedMinute!=null?d.fixedMinute:0;
+  var timVal=(hr<10?'0':'')+hr+':'+(mn<10?'0':'')+mn;
+  var offMin=d.offsetMinutes||0; var offBase=d.offsetBase||0;
+  var days=d.days!=null?d.days:0x7F;
+  var daysHtml='';
+  for(var dd=0;dd<7;dd++){
+    var c=(days&(1<<dd))?'checked':'';
+    daysHtml+='<label style="margin-right:7px"><input type="checkbox" name="s'+si+'_d'+dd+'" '+c+'> '+dayL[dd]+'</label>';
+  }
+  var trOpts='';
+  var trNames=['Feste Uhrzeit','Sonnenaufgang','Sonnenuntergang','Mittagszeit','Offset (relativ)'];
+  for(var t=0;t<5;t++) trOpts+='<option value="'+t+'"'+(tr===t?' selected':'')+'>'+trNames[t]+'</option>';
+  var baseNames=['Sonnenaufgang','Sonnenuntergang','Mittagszeit'];
+  var baseOpts='';
+  for(var b=0;b<3;b++) baseOpts+='<option value="'+b+'"'+(offBase===b?' selected':'')+'>'+baseNames[b]+'</option>';
+  var offDisp=(tr===4)?'flex':'none';
+  return '<div class="pump-entry" id="slot'+si+'" style="border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+    +'<b style="font-size:1.05em">&#128337; '+(si+1)+' &ndash; '+nm+'</b>'
+    +'<button type="button" onclick="deleteSlot('+si+')" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div>'
+    +'<div class="form-row">'
+    +'<div class="form-col"><label><input type="checkbox" name="s'+si+'_enabled" '+en+'> Aktiv</label></div>'
+    +'<div class="form-col"><label>Name</label><input type="text" name="s'+si+'_name" value="'+nm+'" maxlength="31" oninput="this.closest(\'.pump-entry\').querySelector(\'b\').textContent=\'\u23F1 \'+('+si+'+1)+\' \u2013 \'+this.value" required></div>'
+    +'</div>'
+    +'<div class="form-row">'
+    +'<div class="form-col"><label>Ausl&ouml;ser</label><select name="s'+si+'_trigger" onchange="onTriggerChange('+si+',this.value)">'+trOpts+'</select></div>'
+    +'<div class="form-col"><label>Uhrzeit / Fallback</label><input type="time" name="s'+si+'_time" value="'+timVal+'"></div>'
+    +'</div>'
+    +'<div id="offsetRow'+si+'" style="display:'+offDisp+'" class="form-row">'
+    +'<div class="form-col"><label>Offset-Basis</label><select name="s'+si+'_offsetBase">'+baseOpts+'</select></div>'
+    +'<div class="form-col"><label>Offset (Min., negativ = davor)</label><input type="number" name="s'+si+'_offsetMin" value="'+offMin+'" min="-720" max="720"></div>'
+    +'</div>'
+    +'<div style="margin-top:6px">'+daysHtml+'</div>'
+    +'<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:bold;color:#1a6b3c">&#127777;&#65039; Wetterbedingungen</summary>'
+    +'<div class="form-row" style="margin-top:6px">'
+    +'<div class="form-col"><label>Aussetzen wenn Regen &ge; (mm, 0=aus)</label><input type="number" name="s'+si+'_skipRainMm" value="'+(d.skipIfRainMm||0)+'" min="0" max="100" step="0.1"></div>'
+    +'<div class="form-col"><label>Aussetzen wenn Regenwahrsch. &ge; (%, 0=aus)</label><input type="number" name="s'+si+'_skipRainPct" value="'+(d.skipIfRainPct||0)+'" min="0" max="100"></div>'
+    +'</div><div class="form-row">'
+    +'<div class="form-col"><label>Nur wenn Temp. &ge; (°C, -99=immer)</label><input type="number" name="s'+si+'_aboveTemp" value="'+(d.runOnlyAboveTemp||(-99))+'" min="-99" max="60" step="0.5"></div>'
+    +'<div class="form-col"><label>Dauer red. wenn Regen &ge; (mm, 0=aus)</label><input type="number" name="s'+si+'_reduceRainMm" value="'+(d.reduceIfRainMm||0)+'" min="0" max="100" step="0.1"></div>'
+    +'</div><div class="form-row">'
+    +'<div class="form-col"><label>Dauer-Reduktion (%)</label><input type="number" name="s'+si+'_reducePct" value="'+(d.reducePct||50)+'" min="1" max="99"></div>'
+    +'</div></details>'
+    +'<div style="margin-top:10px"><b>&#128167; Pumpenzuweisungen</b>'
+    +'<div id="assigns'+si+'"></div>'
+    +'<input type="hidden" id="aCount'+si+'" name="s'+si+'_assignCount" value="0">'
+    +(pumpCount>0?'<button type="button" onclick="addAssign('+si+')" style="margin-top:6px;padding:4px 12px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer">+ Pumpe hinzuf&#252;gen</button>':'<p style="color:#dc3545;font-size:13px">&#x26A0; Zuerst Pumpen in der Hardware-Konfiguration anlegen.</p>')
+    +'</div></div>';
+}
+function prepareSubmit(){
+  // Collect compact slot count from visible slot divs in the #slots container
+  var visible=document.getElementById('slots').querySelectorAll('.pump-entry');
+  document.getElementById('slotCount').value=visible.length;
 }
 </script>
 )rawhtml";
@@ -534,6 +619,7 @@ const char HTML_SAVED_LIVE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#10003; Gespeichert</h1>
   <p>Konfiguration gespeichert und sofort angewendet.</p>
-  <a class="btn" href="/status" style="margin-top:12px">Zum Status</a>
+  <a class="btn" href="{saved_back_url}" style="margin-top:12px">&#8592; Zur&#252;ck</a>
+  <a class="btn" href="/status" style="margin-top:12px;margin-left:8px">Zum Status</a>
 </div>
 )rawhtml";
