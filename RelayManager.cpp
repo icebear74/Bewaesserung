@@ -6,6 +6,17 @@
 static const int WATCHDOG_SHUTDOWN_MAX_RETRIES = 10;
 static const int WATCHDOG_SHUTDOWN_RETRY_DELAY_MS = 20;
 
+static bool expanderHasAssignedPump(const HardwareConfig& config, int expanderIndex) {
+    if (expanderIndex < 0 || expanderIndex >= config.expanderCount) return false;
+
+    for (int i = 0; i < config.relayCount; i++) {
+        const PumpEntry& pump = config.pumps[i];
+        if (!pump.enabled || pump.outputType != OUTPUT_TYPE_PCF8574) continue;
+        if (pump.expanderIndex == (uint8_t)expanderIndex) return true;
+    }
+    return false;
+}
+
 RelayManager::RelayManager() {
     memset(_pcfDevices, 0, sizeof(_pcfDevices));
     memset(_pcfOk,      0, sizeof(_pcfOk));
@@ -269,6 +280,11 @@ void RelayManager::begin(HardwareConfig& config) {
     for (int d = 0; d < _config.expanderCount; d++) {
         const ExpanderEntry& e = _config.expanders[d];
         if (!e.enabled) continue;
+        if (!expanderHasAssignedPump(_config, d)) {
+            Serial.printf("[Relay] Skipping expander \"%s\" (0x%02X) - no pump assigned yet.\n",
+                          e.name, e.i2cAddress);
+            continue;
+        }
         _pcfDevices[d] = new (std::nothrow) Adafruit_PCF8574();
         if (!_pcfDevices[d]) {
             Serial.printf("[Relay] ERROR: out of memory allocating PCF device %d\n", d);
