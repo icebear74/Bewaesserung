@@ -19,7 +19,7 @@ bool Pcf857xDevice::digitalWrite(uint8_t channel, bool level) {
     uint8_t maxChannel = (_chipType == EXPANDER_TYPE_PCF8575) ? 15 : 7;
     if (channel > maxChannel) return false;
 
-    uint16_t mask = (uint16_t)1U << channel;
+    uint16_t mask = ((uint16_t)1U) << channel;
     if (level) {
         _state |= mask;
     } else {
