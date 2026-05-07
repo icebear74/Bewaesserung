@@ -106,7 +106,8 @@ bool ConfigManager::loadHardwareConfig() {
             if (i < (int)pumps.size()) {
                 JsonObject po = pumps[i].as<JsonObject>();
                 p.enabled       = po["enabled"]       | false;
-                p.outputType    = po["outputType"]     | (uint8_t)OUTPUT_TYPE_GPIO;
+                p.outputType    = (uint8_t)constrain((int)(po["outputType"] | (int)OUTPUT_TYPE_GPIO),
+                                                     (int)OUTPUT_TYPE_GPIO, (int)OUTPUT_TYPE_PCF8574);
                 p.pin           = po["pin"]            | -1;
                 p.invertLogic   = po["invertLogic"]    | false;
                 p.maxRuntimeSec = po["maxRuntimeSec"]  | 300;
@@ -166,6 +167,28 @@ bool ConfigManager::loadHardwareConfig() {
             strlcpy(p.name, nameBuf, sizeof(p.name));
         }
         Serial.printf("[Config] Hardware config loaded (legacy format, migrated): %d relays.\n", _hardwareConfig.relayCount);
+    }
+
+    // Sanitize per-pump expander/channel fields loaded from JSON so that runtime
+    // never addresses invalid expander ports.
+    for (int i = 0; i < MAX_RELAY_COUNT; i++) {
+        PumpEntry& p = _hardwareConfig.pumps[i];
+        if (p.outputType != OUTPUT_TYPE_PCF8574) {
+            p.expanderIndex = 0;
+            p.i2cChannel    = 0;
+            continue;
+        }
+
+        int maxExpanderIndex = (_hardwareConfig.expanderCount > 0)
+                                   ? (_hardwareConfig.expanderCount - 1)
+                                   : 0;
+        p.expanderIndex = (uint8_t)constrain((int)p.expanderIndex, 0, maxExpanderIndex);
+        uint8_t maxChannel = 7;  // PCF8574 default
+        if (p.expanderIndex < _hardwareConfig.expanderCount &&
+            _hardwareConfig.expanders[p.expanderIndex].chipType == EXPANDER_TYPE_PCF8575) {
+            maxChannel = 15;
+        }
+        p.i2cChannel = (uint8_t)constrain((int)p.i2cChannel, 0, (int)maxChannel);
     }
     return true;
 }

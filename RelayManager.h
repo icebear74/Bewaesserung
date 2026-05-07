@@ -6,6 +6,7 @@
 class RelayManager {
 public:
     RelayManager();
+    ~RelayManager();
     void begin(HardwareConfig& config);
 
     // Scheduled watering: only activates if armed (safety lock)
@@ -31,7 +32,11 @@ private:
     bool             _relayState[MAX_RELAY_COUNT]  = {false};
     unsigned long    _testOffAt[MAX_RELAY_COUNT]   = {0};
 
-    // One PCF device per expander entry; indexed directly by ExpanderEntry index
-    Adafruit_PCF8574 _pcfDevices[MAX_EXPANDER_COUNT];
-    bool             _pcfOk[MAX_EXPANDER_COUNT];
+    // One PCF device per expander entry; indexed directly by ExpanderEntry index.
+    // Stored as pointers so fresh objects are created on each begin() call,
+    // guaranteeing the Adafruit_PCF8574 constructor runs on clean heap memory and
+    // i2c_dev is always NULL before begin() is invoked (prevents heap-poison crash
+    // on library versions that call `delete i2c_dev` unconditionally).
+    Adafruit_PCF8574* _pcfDevices[MAX_EXPANDER_COUNT];
+    bool              _pcfOk[MAX_EXPANDER_COUNT];
 };
