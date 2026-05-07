@@ -438,8 +438,9 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
   <h1>&#128167; Bew&#228;sserungsplan</h1>
   {watering_status}
   <div class="alert-info">
-    &#128161; Slots definieren <b>wann</b> bew&#228;ssert wird (Ausl&#246;ser + Wetterbedingungen).<br>
-    Jeder Slot kann mehreren Pumpen zugewiesen werden &#8211; jede Pumpe l&#228;uft <b>sequenziell</b> (nie gleichzeitig).
+    &#128161; <b>Schritt 1:</b> Slots anlegen (Ausl&#246;ser + Wetterbedingungen).<br>
+    <b>Schritt 2:</b> In jedem Slot Pumpen zuweisen (l&#228;uft <b>sequenziell</b>, nie gleichzeitig).<br>
+    Relative Zeiten sind m&#246;glich, z.B. <i>-30 Min vor Sonnenaufgang</i> oder <i>+60 Min nach Sonnenuntergang</i>.
   </div>
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
     <input type="hidden" id="slotCount" name="slotCount" value="{slotCount}">
@@ -470,6 +471,17 @@ function onTriggerChange(si,v){
   var row=document.getElementById('offsetRow'+si);
   if(row) row.style.display=(v==='4')?'flex':'none';
 }
+function toggleSlotEditor(si,forceOpen){
+  var body=document.getElementById('slotBody'+si);
+  if(!body) return;
+  if(forceOpen===true){ body.style.display='block'; return; }
+  body.style.display=(body.style.display==='none' || body.style.display==='')?'block':'none';
+}
+function editSlot(si){
+  toggleSlotEditor(si,true);
+  var inp=document.querySelector('input[name="s'+si+'_name"]');
+  if(inp){ inp.focus(); inp.scrollIntoView({behavior:'smooth',block:'center'}); }
+}
 function updateSlotHeading(slotNum,input){
   var b=input.closest('.pump-entry').querySelector('b');
   if(b) b.textContent='\u23F1 '+slotNum+' \u2013 '+input.value;
@@ -479,14 +491,15 @@ function addSlot(){
   var html=mkSlot(si,{});
   document.getElementById('slots').insertAdjacentHTML('beforeend',html);
   document.getElementById('slotCount').value=_nextSlotIdx;
+  editSlot(si);
   document.getElementById('noSlotsMsg').style.display='none';
 }
 function deleteSlot(si){
   var el=document.getElementById('slot'+si);
   if(el)el.remove();
-  // Recount visible slot divs inside the #slots container
+  // Keep sparse indices stable; backend skips deleted indices by missing field names.
+  document.getElementById('slotCount').value=_nextSlotIdx;
   var remaining=document.getElementById('slots').querySelectorAll('[id^="slot"]');
-  document.getElementById('slotCount').value=remaining.length;
   if(remaining.length===0)document.getElementById('noSlotsMsg').style.display='block';
 }
 function getAssignCount(si){
@@ -499,14 +512,22 @@ function addAssign(si){
   var html='<div class="form-row" style="margin-top:6px;align-items:center" id="arow'+si+'_'+ac+'">'
     +'<div class="form-col"><label>Pumpe</label><select name="a'+si+'_'+ac+'_pump">'+pumpOpts(0)+'</select></div>'
     +'<div class="form-col"><label>Dauer (s)</label><input type="number" name="a'+si+'_'+ac+'_duration" value="60" min="1" max="7200"></div>'
-    +'<div style="padding-top:20px"><button type="button" onclick="deleteAssign('+si+','+ac+')" '
-    +'style="padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005;</button></div></div>';
+    +'<div style="padding-top:20px;display:flex;gap:6px;flex-wrap:wrap">'
+    +'<button type="button" onclick="editAssign('+si+','+ac+')" style="padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9998; Bearbeiten</button>'
+    +'<button type="button" onclick="deleteAssign('+si+','+ac+')" '
+    +'style="padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div></div>';
   document.getElementById('assigns'+si).insertAdjacentHTML('beforeend',html);
   document.getElementById('aCount'+si).value=ac+1;
 }
 function deleteAssign(si,ai){
   var el=document.getElementById('arow'+si+'_'+ai);
   if(el)el.remove();
+}
+function editAssign(si,ai){
+  var row=document.getElementById('arow'+si+'_'+ai);
+  if(!row) return;
+  var sel=row.querySelector('select');
+  if(sel){ sel.focus(); row.scrollIntoView({behavior:'smooth',block:'center'}); }
 }
 function mkSlot(si,d){
   d=d||{};
@@ -533,7 +554,10 @@ function mkSlot(si,d){
   return '<div class="pump-entry" id="slot'+si+'" style="border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
     +'<b style="font-size:1.05em">&#128337; '+si1+' &ndash; '+nm+'</b>'
-    +'<button type="button" onclick="deleteSlot('+si+')" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+    +'<button type="button" onclick="editSlot('+si+')" style="padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9998; Bearbeiten</button>'
+    +'<button type="button" onclick="deleteSlot('+si+')" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#10005; L&#246;schen</button></div></div>'
+    +'<div id="slotBody'+si+'" style="display:block">'
     +'<div class="form-row">'
     +'<div class="form-col"><label><input type="checkbox" name="s'+si+'_enabled" '+en+'> Aktiv</label></div>'
     +'<div class="form-col"><label>Name</label><input type="text" name="s'+si+'_name" value="'+nm+'" maxlength="31" oninput="updateSlotHeading('+si1+',this)" required></div>'
@@ -544,7 +568,7 @@ function mkSlot(si,d){
     +'</div>'
     +'<div id="offsetRow'+si+'" style="display:'+offDisp+'" class="form-row">'
     +'<div class="form-col"><label>Offset-Basis</label><select name="s'+si+'_offsetBase">'+baseOpts+'</select></div>'
-    +'<div class="form-col"><label>Offset (Min., negativ = davor)</label><input type="number" name="s'+si+'_offsetMin" value="'+offMin+'" min="-720" max="720"></div>'
+    +'<div class="form-col"><label>Offset (Min., negativ = davor, positiv = danach)</label><input type="number" name="s'+si+'_offsetMin" value="'+offMin+'" min="-720" max="720"></div>'
     +'</div>'
     +'<div style="margin-top:6px">'+daysHtml+'</div>'
     +'<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:bold;color:#1a6b3c">&#127777;&#65039; Wetterbedingungen</summary>'
@@ -557,16 +581,15 @@ function mkSlot(si,d){
     +'</div><div class="form-row">'
     +'<div class="form-col"><label>Dauer-Reduktion (%)</label><input type="number" name="s'+si+'_reducePct" value="'+(d.reducePct||50)+'" min="1" max="99"></div>'
     +'</div></details>'
-    +'<div style="margin-top:10px"><b>&#128167; Pumpenzuweisungen</b>'
+    +'<div style="margin-top:10px"><b>Schritt 2: &#128167; Pumpenzuweisungen</b>'
     +'<div id="assigns'+si+'"></div>'
     +'<input type="hidden" id="aCount'+si+'" name="s'+si+'_assignCount" value="0">'
     +(pumpCount>0?'<button type="button" onclick="addAssign('+si+')" style="margin-top:6px;padding:4px 12px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer">+ Pumpe hinzuf&#252;gen</button>':'<p style="color:#dc3545;font-size:13px">&#x26A0; Zuerst Pumpen in der Hardware-Konfiguration anlegen.</p>')
-    +'</div></div>';
+    +'</div></div></div>';
 }
 function prepareSubmit(){
-  // Collect compact slot count from visible slot divs in the #slots container
-  var visible=document.getElementById('slots').querySelectorAll('.pump-entry');
-  document.getElementById('slotCount').value=visible.length;
+  // Use highest allocated index so deleted holes are preserved and can be skipped server-side.
+  document.getElementById('slotCount').value=_nextSlotIdx;
 }
 </script>
 )rawhtml";
