@@ -9,6 +9,8 @@ class OledStatus;
 class Ds3231Manager;
 class RelayManager;
 class WebServerManager;
+class WeatherManager;
+class WateringScheduler;
 
 class Application {
 public:
@@ -27,26 +29,30 @@ public:
     void requestConfigApply();
 
     // Accessors for web handlers
-    ConfigManager*    getConfigManager()  { return _configManager; }
-    WifiManager*      getWifiManager()    { return _wifiManager; }
-    TimeSync*         getTimeSync()       { return _timeSync; }
-    Ds3231Manager*    getDs3231()         { return _ds3231; }
-    RelayManager*     getRelayManager()   { return _relayManager; }
-    StateManager*     getStateManager()   { return _stateManager; }
+    ConfigManager*    getConfigManager()    { return _configManager; }
+    WifiManager*      getWifiManager()      { return _wifiManager; }
+    TimeSync*         getTimeSync()         { return _timeSync; }
+    Ds3231Manager*    getDs3231()           { return _ds3231; }
+    RelayManager*     getRelayManager()     { return _relayManager; }
+    StateManager*     getStateManager()     { return _stateManager; }
+    WeatherManager*   getWeatherManager()   { return _weatherManager; }
+    WateringScheduler* getScheduler()       { return _scheduler; }
 
 private:
     void startWifi();
     void startWebServer();
     void executeApplyLiveConfig();
 
-    StateManager*     _stateManager   = nullptr;
-    ConfigManager*    _configManager  = nullptr;
-    WifiManager*      _wifiManager    = nullptr;
-    TimeSync*         _timeSync       = nullptr;
-    OledStatus*       _oledStatus     = nullptr;
-    Ds3231Manager*    _ds3231         = nullptr;
-    RelayManager*     _relayManager   = nullptr;
-    WebServerManager* _webServer      = nullptr;
+    StateManager*      _stateManager   = nullptr;
+    ConfigManager*     _configManager  = nullptr;
+    WifiManager*       _wifiManager    = nullptr;
+    TimeSync*          _timeSync       = nullptr;
+    OledStatus*        _oledStatus     = nullptr;
+    Ds3231Manager*     _ds3231         = nullptr;
+    RelayManager*      _relayManager   = nullptr;
+    WebServerManager*  _webServer      = nullptr;
+    WeatherManager*    _weatherManager = nullptr;
+    WateringScheduler* _scheduler      = nullptr;
 
     bool          _configNeedsApply   = false;
     bool          _restartScheduled   = false;

@@ -7,11 +7,15 @@
 #include "Ds3231Manager.h"
 #include "RelayManager.h"
 #include "WebServerManager.h"
+#include "WeatherManager.h"
+#include "WateringScheduler.h"
 #include <Wire.h>
 
 Application::Application() {}
 
 Application::~Application() {
+    delete _scheduler;
+    delete _weatherManager;
     delete _stateManager;
     delete _configManager;
     delete _wifiManager;
@@ -75,7 +79,15 @@ void Application::begin() {
         _timeSync->begin(_configManager->getDeviceConfig(), _ds3231);
     }
 
-    // 11. Final operational state
+    // 11. Weather manager
+    _weatherManager = new WeatherManager();
+    _weatherManager->begin(_configManager);
+
+    // 12. Watering scheduler
+    _scheduler = new WateringScheduler();
+    _scheduler->begin(_configManager, _relayManager, _weatherManager);
+
+    // 13. Final operational state
     if (_wifiManager->isConnected()) {
         _stateManager->setState(SystemState::RUNNING);
     } else if (_configManager->isWateringConfigValid()) {
@@ -108,6 +120,14 @@ void Application::update() {
 
     if (_timeSync) {
         _timeSync->update();
+    }
+
+    if (_weatherManager) {
+        _weatherManager->update();
+    }
+
+    if (_scheduler) {
+        _scheduler->update();
     }
 
     _webServer->handle(_apModeActive);
@@ -170,4 +190,10 @@ void Application::executeApplyLiveConfig() {
     if (_relayManager) {
         _relayManager->begin(_configManager->getHardwareConfig());
     }
+    // Re-init scheduler with updated config
+    if (_scheduler) {
+        _scheduler->begin(_configManager, _relayManager, _weatherManager);
+    }
 }
+
+// (end of Application.cpp)
