@@ -18,6 +18,7 @@ struct DeviceConfig {
     char hostname[32]    = "Bewaesserung";
     char ssid[64]        = "";
     char password[64]    = "";
+    char otaPassword[64] = "";
     char timezone[64]    = "CET-1CEST,M3.5.0,M10.5.0/3";
     char ntpServer[64]   = "pool.ntp.org";
     float latitude       = 48.1351;
@@ -70,6 +71,7 @@ struct HardwareConfig {
 
 #define MAX_SLOTS           16
 #define MAX_WEATHER_TEMPLATES 16
+#define MAX_WEATHER_RULES_PER_TEMPLATE 8
 #define MAX_SLOT_ASSIGNMENTS 32
 
 // Repeat mode
@@ -107,9 +109,45 @@ struct WeatherPolicy {
     uint8_t reducePct        = 50;     // 1..99
 };
 
+enum WeatherRuleActionType : uint8_t {
+    WEATHER_RULE_SKIP = 0,
+    WEATHER_RULE_REDUCE_RUNTIME,
+    WEATHER_RULE_INCREASE_RUNTIME
+};
+
+enum WeatherRuleMetric : uint8_t {
+    WEATHER_METRIC_CURRENT_TEMP = 0,
+    WEATHER_METRIC_FORECAST_TEMP_MAX,
+    WEATHER_METRIC_CURRENT_RAIN_MM,
+    WEATHER_METRIC_CURRENT_RAIN_PROB,
+    WEATHER_METRIC_DAILY_RAIN_MM,
+    WEATHER_METRIC_DAILY_RAIN_PROB,
+    WEATHER_METRIC_FORECAST_RAIN_SUM,
+    WEATHER_METRIC_FORECAST_RAIN_PROB_MAX
+};
+
+enum WeatherRuleComparison : uint8_t {
+    WEATHER_OP_GT = 0,
+    WEATHER_OP_GTE,
+    WEATHER_OP_LT,
+    WEATHER_OP_LTE
+};
+
+struct WeatherRule {
+    bool    enabled       = true;
+    uint8_t actionType    = WEATHER_RULE_SKIP;
+    uint8_t metric        = WEATHER_METRIC_DAILY_RAIN_MM;
+    uint8_t comparison    = WEATHER_OP_GTE;
+    float   threshold     = 0.0f;
+    uint8_t effectPercent = 25;    // only used for increase/reduce rules
+    uint8_t windowHours   = 24;    // only used for forecast-based metrics
+};
+
 struct WeatherTemplate {
     char          name[32] = "";
-    WeatherPolicy weather;
+    uint8_t       ruleCount = 0;
+    WeatherRule   rules[MAX_WEATHER_RULES_PER_TEMPLATE];
+    WeatherPolicy weather; // legacy import fields; migrated into rules on load
 };
 
 // Assignment: one pump runs for a given duration when a slot fires

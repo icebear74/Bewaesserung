@@ -41,6 +41,7 @@ public:
 private:
     void startWifi();
     void startWebServer();
+    void startOta();
     void executeApplyLiveConfig();
 
     StateManager*      _stateManager   = nullptr;
@@ -59,4 +60,5 @@ private:
     unsigned long _restartAt          = 0;
     bool          _apModeActive       = false;
     bool          _ds3231Present      = false;
+    bool          _otaStarted         = false;
 };

@@ -75,8 +75,15 @@ src/
 
 - **Slots** definieren nur Zeittrigger + Wiederholung (`Wochentage` oder `alle N Tage`).
 - **Pumpen-Zuweisungen** verbinden Pumpen mit Slots (Bacula-ähnlich).
-- **Wetter-Policy** liegt auf der Pumpen-Zuweisung (pro Slot/Pumpe unterschiedlich möglich).
+- **Wetter-Templates** enthalten mehrere kombinierbare Wetterregeln pro Vorlage (z. B. `Hitze -> +20%` und `Regen in 6h -> -25%`).
+- Die Auswertung ist zentral und deterministisch: zuerst **Aussetzen**, danach **Verkürzen/Verlängern** relativ zur Basislaufzeit.
 - Livebetrieb, Status, Simulation und API verwenden dieselbe `WateringDecisionEngine`.
+
+### OTA-Update
+
+- OTA wird automatisch gestartet, sobald das Gerät im WLAN oder Setup-AP erreichbar ist.
+- Das **OTA-Passwort** wird auf der Seite `/config_wifi` gepflegt.
+- Das Passwort schützt drahtlose Firmware-Updates über `ArduinoOTA`.
 
 ### JSON-APIs
 

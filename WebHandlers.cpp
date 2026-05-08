@@ -272,11 +272,14 @@ static void handleStatus() {
                 lastRun = formatDateTimeLocal(rt.lastStartEpoch) + " / " + formatDateTimeLocal(rt.lastStopEpoch);
             }
             String nextCell = foundNext ? (bestSlot + "<br><span style='color:#555'>" + formatDateTimeLocal(bestTs) + "</span>") : "–";
-            String action = foundNext ? String(actionToText(bestPlan.action)) : "skip";
+            String action = foundNext ? String(actionToLabelDe(bestPlan.action)) : "aussetzen";
             String reason = foundNext ? String(bestPlan.reason) : "Keine Zuweisung";
             if (bestWarnings.length()) reason += "<br><span style='color:#b26a00'>⚠ " + bestWarnings + "</span>";
             if (foundNext) {
                 reason += "<br><span style='color:#666'>Policy: " + String(bestPlan.policySource) + "</span>";
+                if (strlen(bestPlan.appliedRules) > 0) {
+                    reason += "<br><span style='color:#555'>Regeln: " + String(bestPlan.appliedRules) + "</span>";
+                }
             }
             pumpHtml += "<tr><td>" + getPumpLabel(hw, i) + "</td><td>" + status + "</td><td>" + nextCell +
                         "</td><td>" + action + (foundNext ? (" (" + String(bestPlan.durationSec) + "s)") : "") +
@@ -433,6 +436,16 @@ static void handleConfigWifi() {
                   "placeholder=\"Leer lassen = keine Änderung\" maxlength=\"63\">";
     }
     page = replaceToken(page, "{password_field}", pwField);
+    bool firstOtaSetup = (cfg.otaPassword[0] == '\0');
+    String otaPwField;
+    if (firstOtaSetup) {
+        otaPwField = "<input type=\"text\" id=\"otaPassword\" name=\"otaPassword\" "
+                     "placeholder=\"OTA-Passwort festlegen\" maxlength=\"63\">";
+    } else {
+        otaPwField = "<input type=\"password\" id=\"otaPassword\" name=\"otaPassword\" "
+                     "placeholder=\"Leer lassen = keine Änderung\" maxlength=\"63\">";
+    }
+    page = replaceToken(page, "{ota_password_field}", otaPwField);
     g_server->send(200, "text/html; charset=UTF-8", page);
     Serial.println("[Web] GET /config_wifi");
 }
@@ -447,6 +460,9 @@ static void handleSaveWifi() {
     // Only update password if a non-empty value was submitted
     if (g_server->hasArg("password") && !g_server->arg("password").isEmpty()) {
         strlcpy(cfg.password, g_server->arg("password").c_str(), sizeof(cfg.password));
+    }
+    if (g_server->hasArg("otaPassword") && !g_server->arg("otaPassword").isEmpty()) {
+        strlcpy(cfg.otaPassword, g_server->arg("otaPassword").c_str(), sizeof(cfg.otaPassword));
     }
     if (g_server->hasArg("hostname")) strlcpy(cfg.hostname, g_server->arg("hostname").c_str(), sizeof(cfg.hostname));
     g_app->getConfigManager()->saveDeviceConfig();
@@ -962,15 +978,15 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<div id=\"slotBody"; r += si; r += "\" style=\"display:none\">";
     // Enabled + Name row
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label><input type=\"checkbox\" name=\"s"; r += si; r += "_enabled\"";
+    r += "<div class=\"form-col\"><label title=\"Nur aktive Slots werden geprüft.\"><input type=\"checkbox\" name=\"s"; r += si; r += "_enabled\"";
     if (slot.enabled) r += " checked";
     r += "> Aktiv</label></div>";
-    r += "<div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Ein Slot ist ein reiner Zeit-Auslöser. Wetterlogik gehört nicht hier hinein.\">Name</label><input type=\"text\" name=\"s"; r += si;
     r += "_name\" value=\""; r += String(slot.name); r += "\" maxlength=\"31\" required></div>";
     r += "</div>";
     // Trigger type + fixed time
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Ausl&ouml;ser</label><select name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Legt fest, worauf sich der Slot zeitlich bezieht: feste Uhrzeit, Sonnenaufgang, Sonnenuntergang oder Offset relativ dazu.\">Ausl&ouml;ser</label><select name=\"s"; r += si;
     r += "_trigger\" onchange=\"onTriggerChange("; r += si; r += ",this.value)\">";
     for (int t = 0; t < 5; t++) {
         r += "<option value=\""; r += t; r += "\"";
@@ -980,26 +996,26 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "</select></div>";
     char timeBuf[8];
     snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", slot.fixedHour, slot.fixedMinute);
-    r += "<div class=\"form-col\"><label>Uhrzeit / Fallback</label>";
+    r += "<div class=\"form-col\"><label title=\"Bei astronomischen Triggern wird diese Uhrzeit verwendet, falls keine Wetter-/Astronomiedaten verfügbar sind.\">Uhrzeit / Fallback</label>";
     r += "<input type=\"time\" name=\"s"; r += si; r += "_time\" value=\""; r += timeBuf; r += "\"></div>";
     r += "</div>";
     // Offset fields (visible only when trigger=4)
     bool isOffset = (slot.triggerType == TRIGGER_OFFSET);
     r += "<div id=\"offsetRow"; r += si;
     r += "\" style=\"display:"; r += (isOffset ? "flex" : "none"); r += ";\" class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Offset-Basis</label><select name=\"s"; r += si; r += "_offsetBase\">";
+    r += "<div class=\"form-col\"><label title=\"Relativ bedeutet: Der Start wird von Sonnenaufgang, Sonnenuntergang oder Mittagszeit aus berechnet.\">Offset-Basis</label><select name=\"s"; r += si; r += "_offsetBase\">";
     for (int b = 0; b < 3; b++) {
         r += "<option value=\""; r += b; r += "\"";
         if (slot.offsetBase == (uint8_t)b) r += " selected";
         r += ">"; r += baseLabels[b]; r += "</option>";
     }
     r += "</select></div>";
-    r += "<div class=\"form-col\"><label>Offset (Min., negativ = davor, positiv = danach)</label>";
+    r += "<div class=\"form-col\"><label title=\"Negativ = davor, positiv = danach. Beispiel: -30 bedeutet 30 Minuten vor der gewählten Basis.\">Offset (Min., negativ = davor, positiv = danach)</label>";
     r += "<input type=\"number\" name=\"s"; r += si; r += "_offsetMin\" value=\"";
     r += slot.offsetMinutes; r += "\" min=\"-720\" max=\"720\"></div>";
     r += "</div>";
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Wiederholung</label><select name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Wochentage = feste Tage. Intervall = alle N Tage ab dem Ankerdatum.\">Wiederholung</label><select name=\"s"; r += si;
     r += "_repeatMode\" onchange=\"onRepeatModeChange("; r += si; r += ",this.value)\">";
     r += "<option value=\"0\"";
     if (slot.repeatMode == REPEAT_WEEKDAYS) r += " selected";
@@ -1020,9 +1036,9 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<div id=\"intervalRow"; r += si;
     r += "\" style=\"display:"; r += (intervalMode ? "flex" : "none");
     r += "\" class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Alle N Tage</label><input type=\"number\" name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Beispiel: 3 bedeutet alle drei Tage.\">Alle N Tage</label><input type=\"number\" name=\"s"; r += si;
     r += "_intervalDays\" value=\""; r += slot.intervalDays; r += "\" min=\"1\" max=\"90\"></div>";
-    r += "<div class=\"form-col\"><label>Startdatum (Anker)</label><input type=\"date\" name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Ab diesem Datum wird das Intervall gezählt.\">Startdatum (Anker)</label><input type=\"date\" name=\"s"; r += si;
     r += "_intervalAnchor\" value=\""; r += epochDayToDateString(slot.intervalAnchorDay); r += "\"></div></div>";
     r += "</div></div>";  // slot-entry + slotBody
     return r;
@@ -1045,12 +1061,215 @@ static String getWeatherTemplateLabel(const SlotConfig& sc, int idx) {
         : ("Wetter " + String(idx + 1));
 }
 
+static const char* weatherRuleActionLabel(uint8_t actionType) {
+    switch (actionType) {
+        case WEATHER_RULE_REDUCE_RUNTIME: return "Laufzeit verkürzen";
+        case WEATHER_RULE_INCREASE_RUNTIME: return "Laufzeit verlängern";
+        default: return "Aussetzen";
+    }
+}
+
+static const char* weatherRuleMetricLabel(uint8_t metric) {
+    switch (metric) {
+        case WEATHER_METRIC_CURRENT_TEMP: return "Aktuelle Temperatur";
+        case WEATHER_METRIC_FORECAST_TEMP_MAX: return "Max. Temperatur in Zeitfenster";
+        case WEATHER_METRIC_CURRENT_RAIN_MM: return "Aktueller Niederschlag (mm)";
+        case WEATHER_METRIC_CURRENT_RAIN_PROB: return "Aktuelle Regenwahrscheinlichkeit (%)";
+        case WEATHER_METRIC_DAILY_RAIN_MM: return "Regen heute (mm)";
+        case WEATHER_METRIC_DAILY_RAIN_PROB: return "Regenwahrscheinlichkeit heute (%)";
+        case WEATHER_METRIC_FORECAST_RAIN_SUM: return "Regenmenge im Zeitfenster (mm)";
+        case WEATHER_METRIC_FORECAST_RAIN_PROB_MAX: return "Max. Regenwahrscheinlichkeit im Zeitfenster (%)";
+        default: return "Wetterwert";
+    }
+}
+
+static bool weatherMetricUsesWindow(uint8_t metric) {
+    return metric == WEATHER_METRIC_FORECAST_TEMP_MAX ||
+           metric == WEATHER_METRIC_FORECAST_RAIN_SUM ||
+           metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX;
+}
+
+static String buildWeatherRuleSummary(const WeatherRule& rule) {
+    String metric = weatherRuleMetricLabel(rule.metric);
+    String op = ">=";
+    switch (rule.comparison) {
+        case WEATHER_OP_GT: op = ">"; break;
+        case WEATHER_OP_GTE: op = ">="; break;
+        case WEATHER_OP_LT: op = "<"; break;
+        case WEATHER_OP_LTE: op = "<="; break;
+    }
+    String threshold = String(rule.threshold, (rule.metric == WEATHER_METRIC_CURRENT_TEMP || rule.metric == WEATHER_METRIC_FORECAST_TEMP_MAX ||
+                                              rule.metric == WEATHER_METRIC_CURRENT_RAIN_MM || rule.metric == WEATHER_METRIC_DAILY_RAIN_MM ||
+                                              rule.metric == WEATHER_METRIC_FORECAST_RAIN_SUM) ? 1 : 0);
+    String unit = (rule.metric == WEATHER_METRIC_CURRENT_TEMP || rule.metric == WEATHER_METRIC_FORECAST_TEMP_MAX)
+                      ? "°C"
+                      : ((rule.metric == WEATHER_METRIC_CURRENT_RAIN_PROB || rule.metric == WEATHER_METRIC_DAILY_RAIN_PROB ||
+                          rule.metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX)
+                             ? "%"
+                             : " mm");
+    String tail = weatherMetricUsesWindow(rule.metric)
+                      ? (" in den nächsten " + String(rule.windowHours) + "h")
+                      : "";
+    if (rule.actionType == WEATHER_RULE_SKIP) {
+        return metric + tail + " " + op + " " + threshold + unit + " → Aussetzen";
+    }
+    String sign = (rule.actionType == WEATHER_RULE_REDUCE_RUNTIME) ? "-" : "+";
+    return metric + tail + " " + op + " " + threshold + unit + " → " +
+           sign + String(rule.effectPercent) + "% Laufzeit";
+}
+
+static String buildWeatherRuleRowHtml(int wi, int ri, const WeatherRule& rule) {
+    String html;
+    html.reserve(1800);
+    bool showWindow = weatherMetricUsesWindow(rule.metric);
+    bool showEffect = rule.actionType != WEATHER_RULE_SKIP;
+    html += "<div id=\"wtr";
+    html += wi;
+    html += "_";
+    html += ri;
+    html += "\" style=\"border:1px solid #dce8f8;border-radius:6px;padding:10px;margin:8px 0;background:#fff\">";
+    html += "<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px\"><b>Regel ";
+    html += (ri + 1);
+    html += "</b><button type=\"button\" onclick=\"deleteWeatherRule(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; Entfernen</button></div>";
+    html += "<div class=\"hint-text\" id=\"wt";
+    html += wi;
+    html += "r";
+    html += ri;
+    html += "Summary\" style=\"margin-bottom:8px\">";
+    html += buildWeatherRuleSummary(rule);
+    html += "</div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-col\"><label title=\"Aktive Regeln werden ausgewertet, deaktivierte Regeln bleiben gespeichert.\"><input type=\"checkbox\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_enabled\"";
+    if (rule.enabled) html += " checked";
+    html += " onchange=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"> Aktiv</label></div>";
+    html += "<div class=\"form-col\"><label title=\"Aussetzen stoppt die Pumpe komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_action\" onchange=\"onRuleActionChange(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ",this.value)\">";
+    for (int a = WEATHER_RULE_SKIP; a <= WEATHER_RULE_INCREASE_RUNTIME; a++) {
+        html += "<option value=\"";
+        html += a;
+        html += "\"";
+        if (rule.actionType == (uint8_t)a) html += " selected";
+        html += ">";
+        html += weatherRuleActionLabel((uint8_t)a);
+        html += "</option>";
+    }
+    html += "</select></div>";
+    html += "</div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-col\"><label title=\"Der Wetterwert wird mit dem Schwellwert verglichen. F\u00fcr Zeitfenster-Regeln werden die n\u00e4chsten Stunden verwendet.\">Wetterwert</label><select name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_metric\" onchange=\"onRuleMetricChange(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ",this.value)\">";
+    for (int m = WEATHER_METRIC_CURRENT_TEMP; m <= WEATHER_METRIC_FORECAST_RAIN_PROB_MAX; m++) {
+        html += "<option value=\"";
+        html += m;
+        html += "\"";
+        if (rule.metric == (uint8_t)m) html += " selected";
+        html += ">";
+        html += weatherRuleMetricLabel((uint8_t)m);
+        html += "</option>";
+    }
+    html += "</select></div>";
+    html += "<div class=\"form-col\"><label title=\"Vergleicht Wetterwert und Schwellwert. Beispiel: > 30°C.\">Vergleich</label><select name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_operator\" onchange=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\">";
+    for (int op = WEATHER_OP_GT; op <= WEATHER_OP_LTE; op++) {
+        const char* opText = (op == WEATHER_OP_GT) ? ">" : (op == WEATHER_OP_GTE) ? ">=" : (op == WEATHER_OP_LT) ? "<" : "<=";
+        html += "<option value=\"";
+        html += op;
+        html += "\"";
+        if (rule.comparison == (uint8_t)op) html += " selected";
+        html += ">";
+        html += opText;
+        html += "</option>";
+    }
+    html += "</select></div>";
+    html += "<div class=\"form-col\"><label title=\"Ab diesem Wert greift die Regel.\">Schwellwert</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_threshold\" value=\"";
+    html += String(rule.threshold, 1);
+    html += "\" step=\"0.1\" oninput=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"></div></div>";
+    html += "<div id=\"wt";
+    html += wi;
+    html += "r";
+    html += ri;
+    html += "WindowRow\" class=\"form-row\" style=\"display:";
+    html += (showWindow ? "flex" : "none");
+    html += "\"><div class=\"form-col\"><label title=\"Nur f\u00fcr Zeitfenster-Regeln: wie viele n\u00e4chste Stunden ausgewertet werden.\">Zeitfenster (h)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_windowHours\" value=\"";
+    html += rule.windowHours;
+    html += "\" min=\"1\" max=\"48\" oninput=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"></div></div>";
+    html += "<div id=\"wt";
+    html += wi;
+    html += "r";
+    html += ri;
+    html += "EffectRow\" class=\"form-row\" style=\"display:";
+    html += (showEffect ? "flex" : "none");
+    html += "\"><div class=\"form-col\"><label title=\"Positive Prozentwerte beziehen sich immer auf die Basislaufzeit der Zuweisung.\">Effekt (%)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_effectPct\" value=\"";
+    html += rule.effectPercent;
+    html += "\" min=\"1\" max=\"200\" oninput=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"></div></div></div>";
+    return html;
+}
+
 static String buildWeatherTemplateRowHtml(int wi, const WeatherTemplate& wt) {
     String label = wt.name[0] ? String(wt.name) : ("Wetter " + String(wi + 1));
     String html;
-    html.reserve(1200);
+    html.reserve(3200);
     html += "<div class=\"pump-entry\" id=\"wt";
     html += wi;
+    html += "\" data-next-rule=\"";
+    html += wt.ruleCount;
     html += "\" style=\"border:1px solid #cfe0f6;padding:12px;margin-bottom:12px;border-radius:6px;background:#f7fbff\">";
     html += "<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\">";
     html += "<b style=\"font-size:1.05em\">🌦️ ";
@@ -1071,34 +1290,29 @@ static String buildWeatherTemplateRowHtml(int wi, const WeatherTemplate& wt) {
     html += "\" maxlength=\"31\" oninput=\"updateWeatherTemplateHeading(";
     html += wi;
     html += ",this)\" required></div></div>";
-    html += "<div class=\"form-row\">";
-    html += "<div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"wt";
+    html += "<div class=\"hint-text\" style=\"margin-bottom:8px\">Ein Template kann mehrere Regeln enthalten. Reihenfolge im System: erst <b>Aussetzen</b>, danach <b>Verkürzen/Verlängern</b>. Zuschl&#228;ge und Abz&#252;ge beziehen sich immer auf die Basislaufzeit der Zuweisung.</div>";
+    html += "<input type=\"hidden\" name=\"wt";
     html += wi;
-    html += "_skipRainMm\" value=\"";
-    html += wt.weather.skipIfRainMm;
-    html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div>";
-    html += "<div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"wt";
+    html += "_ruleCount\" id=\"wt";
     html += wi;
-    html += "_skipRainPct\" value=\"";
-    html += wt.weather.skipIfRainPct;
-    html += "\" min=\"0\" max=\"100\"></div>";
-    html += "</div><div class=\"form-row\">";
-    html += "<div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"wt";
+    html += "RuleCount\" value=\"";
+    html += wt.ruleCount;
+    html += "\">";
+    html += "<div id=\"wtRules";
     html += wi;
-    html += "_aboveTemp\" value=\"";
-    html += wt.weather.runOnlyAboveTemp;
-    html += "\" min=\"-99\" max=\"60\" step=\"0.5\"></div>";
-    html += "<div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"wt";
+    html += "\">";
+    for (int ri = 0; ri < wt.ruleCount; ri++) {
+        html += buildWeatherRuleRowHtml(wi, ri, wt.rules[ri]);
+    }
+    html += "</div>";
+    html += "<div id=\"wt";
     html += wi;
-    html += "_reduceRainMm\" value=\"";
-    html += wt.weather.reduceIfRainMm;
-    html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div>";
-    html += "<div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"wt";
+    html += "NoRulesMsg\" class=\"hint-text\" style=\"display:";
+    html += (wt.ruleCount == 0 ? "block" : "none");
+    html += ";margin:8px 0\">Noch keine Wetterregel definiert.</div>";
+    html += "<button type=\"button\" class=\"btn\" onclick=\"addWeatherRule(";
     html += wi;
-    html += "_reducePct\" value=\"";
-    html += wt.weather.reducePct;
-    html += "\" min=\"1\" max=\"99\"></div>";
-    html += "</div></div>";
+    html += ")\" style=\"background:#5c88c8;padding:7px 14px;font-size:13px\">+ Regel hinzuf&#252;gen</button></div>";
     return html;
 }
 
@@ -1124,7 +1338,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         html += displayIdx;
         html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
         html += "</div></div><div class=\"form-row\">";
-        html += "<div class=\"form-col\"><label>Slot</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Ein Slot beschreibt nur, wann geprüft wird. Er enthält keine pumpenspezifische Wetterlogik.\">Slot</label><select name=\"as";
         html += displayIdx;
         html += "_slot\">";
         for (int si = 0; si < sc.slotCount; si++) {
@@ -1136,7 +1350,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label>Pumpe</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Die konkrete Pumpe, die bei dieser Zuweisung laufen soll.\">Pumpe</label><select name=\"as";
         html += displayIdx;
         html += "_pump\">";
         for (int pi = 0; pi < hw.relayCount; pi++) {
@@ -1148,7 +1362,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label>Wetter-Template</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Hier wird festgelegt, welche Wetterregeln für genau diese Pumpe und diesen Slot gelten. Kein Template = reine Zeitsteuerung.\">Wetter-Template</label><select name=\"as";
         html += displayIdx;
         html += "_weatherTemplate\">";
         html += "<option value=\"-1\"";
@@ -1165,7 +1379,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Basislaufzeit ohne Wetteranpassung. Zuschläge und Abzüge der Regeln beziehen sich auf diesen Wert.\">Dauer (s)</label><input type=\"number\" name=\"as";
         html += displayIdx;
         html += "_duration\" value=\"";
         html += a.durationSec;
@@ -1400,17 +1614,34 @@ static void handleSaveWatering() {
         wt = WeatherTemplate{};
         strlcpy(wt.name, g_server->arg(key).c_str(), sizeof(wt.name));
 
-        snprintf(key, sizeof(key), "wt%d_skipRainMm", wi);
-        wt.weather.skipIfRainMm = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
-        snprintf(key, sizeof(key), "wt%d_skipRainPct", wi);
-        wt.weather.skipIfRainPct = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
-        snprintf(key, sizeof(key), "wt%d_aboveTemp", wi);
-        wt.weather.runOnlyAboveTemp = g_server->hasArg(key) ? g_server->arg(key).toFloat() : -99.0f;
-        snprintf(key, sizeof(key), "wt%d_reduceRainMm", wi);
-        wt.weather.reduceIfRainMm = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
-        snprintf(key, sizeof(key), "wt%d_reducePct", wi);
-        wt.weather.reducePct = (uint8_t)constrain(
-            g_server->hasArg(key) ? g_server->arg(key).toInt() : 50, 1, 99);
+        snprintf(key, sizeof(key), "wt%d_ruleCount", wi);
+        int ruleCount = constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0,
+                                  0, MAX_WEATHER_RULES_PER_TEMPLATE * 4);
+        for (int ri = 0; ri < ruleCount && wt.ruleCount < MAX_WEATHER_RULES_PER_TEMPLATE; ri++) {
+            char rkey[40];
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_action", wi, ri);
+            if (!g_server->hasArg(rkey)) continue;
+
+            WeatherRule& rule = wt.rules[wt.ruleCount++];
+            rule = WeatherRule{};
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_enabled", wi, ri);
+            rule.enabled = g_server->hasArg(rkey);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_action", wi, ri);
+            rule.actionType = (uint8_t)constrain(g_server->arg(rkey).toInt(),
+                                                 WEATHER_RULE_SKIP, WEATHER_RULE_INCREASE_RUNTIME);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_metric", wi, ri);
+            rule.metric = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : WEATHER_METRIC_DAILY_RAIN_MM,
+                                             WEATHER_METRIC_CURRENT_TEMP, WEATHER_METRIC_FORECAST_RAIN_PROB_MAX);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_operator", wi, ri);
+            rule.comparison = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : WEATHER_OP_GTE,
+                                                 WEATHER_OP_GT, WEATHER_OP_LTE);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_threshold", wi, ri);
+            rule.threshold = g_server->hasArg(rkey) ? g_server->arg(rkey).toFloat() : 0.0f;
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_windowHours", wi, ri);
+            rule.windowHours = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : 24, 1, 48);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_effectPct", wi, ri);
+            rule.effectPercent = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : 25, 1, 200);
+        }
         newSc.weatherTemplateCount++;
     }
 
@@ -1484,8 +1715,19 @@ static const char* actionToText(WateringDecisionAction action) {
     switch (action) {
         case WATER_ACTION_EXECUTE: return "execute";
         case WATER_ACTION_REDUCE:  return "reduce";
+        case WATER_ACTION_EXTEND:  return "extend";
         case WATER_ACTION_FALLBACK:return "fallback";
         default:                   return "skip";
+    }
+}
+
+static const char* actionToLabelDe(WateringDecisionAction action) {
+    switch (action) {
+        case WATER_ACTION_EXECUTE: return "ausführen";
+        case WATER_ACTION_REDUCE:  return "verkürzen";
+        case WATER_ACTION_EXTEND:  return "verlängern";
+        case WATER_ACTION_FALLBACK:return "Fallback";
+        default:                   return "aussetzen";
     }
 }
 
@@ -1681,9 +1923,11 @@ static void handleApiWateringSimulate() {
         p["pumpName"] = getPumpLabel(hw, result.plan[i].pumpIndex);
         p["baseDurationSec"] = result.plan[i].baseDurationSec;
         p["durationSec"] = result.plan[i].durationSec;
+        p["adjustmentPercent"] = result.plan[i].adjustmentPercent;
         p["action"] = actionToText(result.plan[i].action);
         p["reason"] = result.plan[i].reason;
         p["policySource"] = result.plan[i].policySource;
+        p["appliedRules"] = result.plan[i].appliedRules;
     }
 
     String json;
@@ -1812,8 +2056,10 @@ static void handleApiWateringStatus() {
                 p["action"] = actionToText(next.result.plan[i].action);
                 p["durationSec"] = next.result.plan[i].durationSec;
                 p["baseDurationSec"] = next.result.plan[i].baseDurationSec;
+                p["adjustmentPercent"] = next.result.plan[i].adjustmentPercent;
                 p["reason"] = next.result.plan[i].reason;
                 p["policySource"] = next.result.plan[i].policySource;
+                p["appliedRules"] = next.result.plan[i].appliedRules;
             }
         }
 
@@ -1861,8 +2107,10 @@ static void handleApiWateringStatus() {
         p["nextAction"] = foundPumpNext ? String(actionToText(bestPlan.action)) : String("skip");
         p["nextReason"] = foundPumpNext ? String(bestPlan.reason) : String("Keine Zuweisung.");
         p["nextDurationSec"] = foundPumpNext ? bestPlan.durationSec : 0;
+        p["adjustmentPercent"] = foundPumpNext ? bestPlan.adjustmentPercent : 0;
         p["triggerSource"] = foundPumpNext ? String(bestResult.triggerSource) : String("");
         p["warnings"] = foundPumpNext ? String(bestResult.warnings) : String("");
+        p["appliedRules"] = foundPumpNext ? String(bestPlan.appliedRules) : String("");
     }
 
     JsonArray warnings = doc["warnings"].to<JsonArray>();

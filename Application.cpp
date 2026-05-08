@@ -9,6 +9,7 @@
 #include "WebServerManager.h"
 #include "WeatherManager.h"
 #include "WateringScheduler.h"
+#include <ArduinoOTA.h>
 #include <Wire.h>
 
 Application::Application() {}
@@ -70,6 +71,7 @@ void Application::begin() {
     // 9. Web server
     _webServer = new WebServerManager();
     startWebServer();
+    startOta();
 
     // 10. NTP time sync (only when WiFi connected)
     _timeSync = new TimeSync();
@@ -114,6 +116,10 @@ void Application::update() {
 
     _wifiManager->update();
 
+    if (!_otaStarted && (_wifiManager->isConnected() || _wifiManager->isApModeActive())) {
+        startOta();
+    }
+
     if (_relayManager) {
         _relayManager->update();
     }
@@ -128,6 +134,10 @@ void Application::update() {
 
     if (_scheduler) {
         _scheduler->update();
+    }
+
+    if (_otaStarted) {
+        ArduinoOTA.handle();
     }
 
     _webServer->handle(_apModeActive);
@@ -178,6 +188,35 @@ void Application::startWifi() {
 void Application::startWebServer() {
     _webServer->begin(this, _apModeActive);
     Serial.println("[App] Web server started.");
+}
+
+void Application::startOta() {
+    if (_otaStarted || !_configManager || !_wifiManager) return;
+    if (!_wifiManager->isConnected() && !_wifiManager->isApModeActive()) return;
+
+    DeviceConfig& cfg = _configManager->getDeviceConfig();
+    ArduinoOTA.setHostname(cfg.hostname[0] ? cfg.hostname : "Bewaesserung");
+    if (cfg.otaPassword[0]) {
+        ArduinoOTA.setPassword(cfg.otaPassword);
+    }
+    ArduinoOTA.onStart([]() {
+        Serial.println("[OTA] Update started.");
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\n[OTA] Update finished.");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        unsigned int pct = total ? (progress * 100U) / total : 0;
+        Serial.printf("[OTA] Progress: %u%%\r", pct);
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("[OTA] Error %u\n", (unsigned)error);
+    });
+    ArduinoOTA.begin();
+    _otaStarted = true;
+    Serial.printf("[OTA] Ready on %s as '%s'.\n",
+                  _wifiManager->isApModeActive() ? "AP" : "WLAN",
+                  cfg.hostname[0] ? cfg.hostname : "Bewaesserung");
 }
 
 void Application::executeApplyLiveConfig() {
