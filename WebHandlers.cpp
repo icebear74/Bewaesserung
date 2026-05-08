@@ -1788,7 +1788,12 @@ static bool findNextSlotDecision(int slotIndex,
                                  bool weatherAvailable,
                                  bool weatherStale,
                                  NextSlotDecisionInfo& out) {
-    out = NextSlotDecisionInfo{};
+    // Use memset instead of `out = NextSlotDecisionInfo{}` to avoid a ~14 KB
+    // stack temporary (NextSlotDecisionInfo embeds WateringDecisionResult).
+    // Copy elision does not apply to assignment, so the value-construction form
+    // would place 14 KB on the stack and overflow into heap metadata.
+    memset(&out, 0, sizeof(out));
+    out.result.slotIndex = -1;  // restore only non-zero default inside WateringDecisionResult
     if (slotIndex < 0 || slotIndex >= sc.slotCount) return false;
     if (nowLocal < 1000000L) return false;
 

@@ -391,7 +391,12 @@ time_t WateringDecisionEngine::computeTriggerTime(const WateringSlot& slot,
 }
 
 void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, WateringDecisionResult& out) {
-    out = WateringDecisionResult{};  // zero-init caller-supplied PSRAM storage
+    // Use memset + explicit field reset rather than `out = WateringDecisionResult{}`.
+    // The value-construction form creates a ~14 KB temporary on the stack (copy elision
+    // only applies to initialisation, not assignment), which overflows the loopTask stack
+    // and corrupts heap metadata.
+    memset(&out, 0, sizeof(out));
+    out.slotIndex = -1;  // only non-zero default in WateringDecisionResult
     out.slotIndex = input.slotIndex;
 
     if (!input.slotConfig || !input.hardwareConfig ||
