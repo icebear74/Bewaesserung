@@ -52,6 +52,15 @@ static String formatUptime() {
     return String(buf);
 }
 
+static int daysFromCivil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int)doe - 719468;
+}
+
 // ─── Common warning fragments ─────────────────────────────────────────────────
 
 static String ds3231WarningHtml() {
@@ -1045,23 +1054,28 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         html += displayIdx;
         html += "\" style=\"display:";
         html += (usePolicyUi ? "block" : "none");
-        html += ";width:100%\"><div class=\"form-row\"><div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"as";
+        html += ";width:100%\"><div class=\"form-row\"><div class=\"form-col\">";
+        html += "<label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"as";
         html += displayIdx;
         html += "_skipRainMm\" value=\"";
         html += wp.skipIfRainMm;
-        html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"as";
+        html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\">";
+        html += "<label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"as";
         html += displayIdx;
         html += "_skipRainPct\" value=\"";
         html += wp.skipIfRainPct;
-        html += "\" min=\"0\" max=\"100\"></div></div><div class=\"form-row\"><div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"as";
+        html += "\" min=\"0\" max=\"100\"></div></div><div class=\"form-row\"><div class=\"form-col\">";
+        html += "<label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"as";
         html += displayIdx;
         html += "_aboveTemp\" value=\"";
         html += wp.runOnlyAboveTemp;
-        html += "\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"as";
+        html += "\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\">";
+        html += "<label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"as";
         html += displayIdx;
         html += "_reduceRainMm\" value=\"";
         html += wp.reduceIfRainMm;
-        html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"as";
+        html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\">";
+        html += "<label>Reduktion (%)</label><input type=\"number\" name=\"as";
         html += displayIdx;
         html += "_reducePct\" value=\"";
         html += wp.reducePct;
@@ -1243,13 +1257,11 @@ static void handleSaveWatering() {
         if (g_server->hasArg(key)) {
             String ad = g_server->arg(key);
             if (ad.length() >= 10) {
-                struct tm at = {};
-                at.tm_year = ad.substring(0, 4).toInt() - 1900;
-                at.tm_mon  = ad.substring(5, 7).toInt() - 1;
-                at.tm_mday = ad.substring(8, 10).toInt();
-                at.tm_hour = 0; at.tm_min = 0; at.tm_sec = 0; at.tm_isdst = -1;
-                time_t adTs = mktime(&at);
-                s.intervalAnchorDay = adTs > 0 ? (uint16_t)((unsigned long)adTs / 86400UL) : 0;
+                int y = ad.substring(0, 4).toInt();
+                int m = ad.substring(5, 7).toInt();
+                int d = ad.substring(8, 10).toInt();
+                int epochDay = daysFromCivil(y, (unsigned)m, (unsigned)d);
+                s.intervalAnchorDay = (uint16_t)constrain(epochDay, 0, 65535);
             } else {
                 s.intervalAnchorDay = 0;
             }
@@ -1258,7 +1270,13 @@ static void handleSaveWatering() {
         }
         if (s.repeatMode == REPEAT_INTERVAL_DAYS && s.intervalAnchorDay == 0) {
             time_t n = time(nullptr);
-            if (n > 0) s.intervalAnchorDay = (uint16_t)((unsigned long)n / 86400UL);
+            if (n > 0) {
+                struct tm nt;
+                localtime_r(&n, &nt);
+                s.intervalAnchorDay = (uint16_t)constrain(
+                    daysFromCivil(nt.tm_year + 1900, (unsigned)(nt.tm_mon + 1), (unsigned)nt.tm_mday),
+                    0, 65535);
+            }
         }
         newSc.slotCount++;
     }

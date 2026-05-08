@@ -6,16 +6,19 @@ static void setText(char* dst, size_t dstSize, const char* text) {
     strlcpy(dst, text ? text : "", dstSize);
 }
 
+static int daysFromCivil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);                       // [0, 399]
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1; // [0, 365]
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;           // [0, 146096]
+    return era * 146097 + (int)doe - 719468;
+}
+
 static int localEpochDay(time_t localTs) {
     struct tm t;
     localtime_r(&localTs, &t);
-    t.tm_hour = 0;
-    t.tm_min = 0;
-    t.tm_sec = 0;
-    t.tm_isdst = -1;
-    time_t midnight = mktime(&t);
-    if (midnight <= 0) return 0;
-    return (int)(midnight / 86400);
+    return daysFromCivil(t.tm_year + 1900, (unsigned)(t.tm_mon + 1), (unsigned)t.tm_mday);
 }
 
 static bool dayMatches(const WateringSlot& slot, time_t localTs) {

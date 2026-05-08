@@ -543,7 +543,15 @@ function addAssignment(){
     +'<div class=\"form-col\"><label>Pumpe</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
     +'<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as'+ai+'_duration\" value=\"60\" min=\"1\" max=\"7200\"></div>'
     +'<div class=\"form-col\"><label>Wetter-Policy</label><select name=\"as'+ai+'_weatherMode\" onchange=\"onAssignmentWeatherModeChange('+ai+',this.value)\"><option value=\"none\">Ignorieren</option><option value=\"policy\">Eigene Policy</option></select></div>'
-    +'<div id=\"asweather'+ai+'\" style=\"display:none;width:100%\"><div class=\"form-row\"><div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_skipRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"as'+ai+'_skipRainPct\" value=\"0\" min=\"0\" max=\"100\"></div></div><div class=\"form-row\"><div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"as'+ai+'_aboveTemp\" value=\"-99\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_reduceRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"as'+ai+'_reducePct\" value=\"50\" min=\"1\" max=\"99\"></div></div></div>'
+    +'<div id=\"asweather'+ai+'\" style=\"display:none;width:100%\">'
+    +'<div class=\"form-row\">'
+    +'<div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_skipRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div>'
+    +'<div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"as'+ai+'_skipRainPct\" value=\"0\" min=\"0\" max=\"100\"></div>'
+    +'</div><div class=\"form-row\">'
+    +'<div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"as'+ai+'_aboveTemp\" value=\"-99\" min=\"-99\" max=\"60\" step=\"0.5\"></div>'
+    +'<div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_reduceRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div>'
+    +'<div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"as'+ai+'_reducePct\" value=\"50\" min=\"1\" max=\"99\"></div>'
+    +'</div></div>'
     +'<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">'
     +'<button type=\"button\" onclick=\"editAssignment('+ai+')\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>'
     +'<button type=\"button\" onclick=\"deleteAssignment('+ai+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>'
@@ -635,7 +643,10 @@ function renderWeatherContext(d){
   var el=document.getElementById('simWeatherContext');
   if(!el) return;
   if(!d||!d.available){ el.innerHTML='<b>Wetterkontext:</b> keine Live-Daten verfügbar.'; return; }
-  var h='<b>Wetterkontext (nächste 24h)</b><br>Sonnenaufgang: '+hhmmFromTs(d.sunrise)+' | Sonnenuntergang: '+hhmmFromTs(d.sunset)+' | Daten '+(d.stale?'veraltet':'frisch');
+  var h='<b>Wetterkontext (nächste 24h)</b><br>'
+    +'Sonnenaufgang: '+hhmmFromTs(d.sunrise)
+    +' | Sonnenuntergang: '+hhmmFromTs(d.sunset)
+    +' | Daten '+(d.stale?'veraltet':'frisch');
   if(d.hourly24h&&d.hourly24h.length){
     h+='<table style=\"margin-top:8px\"><tr><th>Zeit</th><th>Temp</th><th>Regen</th><th>Wahrsch.</th></tr>';
     d.hourly24h.forEach(function(it){ h+='<tr><td>'+hhmmFromTs(it.ts)+'</td><td>'+esc(it.temp)+'°C</td><td>'+esc(it.precipMm)+' mm</td><td>'+esc(it.precipPct)+'%</td></tr>';});
