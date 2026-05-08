@@ -61,5 +61,7 @@ public:
                                      bool weatherAvailable,
                                      bool* usedFallbackTime);
 
-    static WateringDecisionResult evaluateSlot(const WateringDecisionInput& input);
+    // Writes the decision into caller-supplied storage (avoids a ~14 KB stack
+    // allocation – callers should allocate WateringDecisionResult in PSRAM).
+    static void evaluateSlot(const WateringDecisionInput& input, WateringDecisionResult& out);
 };

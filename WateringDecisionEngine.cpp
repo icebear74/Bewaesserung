@@ -390,14 +390,14 @@ time_t WateringDecisionEngine::computeTriggerTime(const WateringSlot& slot,
     return (base != 0) ? base : buildFixed();
 }
 
-WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input) {
-    WateringDecisionResult out;
+void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, WateringDecisionResult& out) {
+    out = WateringDecisionResult{};  // zero-init caller-supplied PSRAM storage
     out.slotIndex = input.slotIndex;
 
     if (!input.slotConfig || !input.hardwareConfig ||
         input.slotIndex < 0 || input.slotIndex >= input.slotConfig->slotCount) {
         setText(out.reason, sizeof(out.reason), "Ungültige Evaluationsdaten.");
-        return out;
+        return;
     }
 
     out.validInput = true;
@@ -405,12 +405,12 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
 
     if (!slot.enabled) {
         setText(out.reason, sizeof(out.reason), "Slot ist deaktiviert.");
-        return out;
+        return;
     }
 
     if (input.nowLocal < 1000000L) {
         setText(out.reason, sizeof(out.reason), "Systemzeit ist nicht gesetzt.");
-        return out;
+        return;
     }
 
     out.dayMatched = dayMatches(slot, input.nowLocal);
@@ -420,7 +420,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
         } else {
             setText(out.reason, sizeof(out.reason), "Slot ist heute nicht aktiv.");
         }
-        return out;
+        return;
     }
 
     out.triggerTime = computeTriggerTime(slot,
@@ -430,7 +430,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
                                          &out.usedFallbackTime);
     if (out.triggerTime == 0) {
         setText(out.reason, sizeof(out.reason), "Auslöserzeit konnte nicht berechnet werden.");
-        return out;
+        return;
     }
     fillTriggerSource(out.triggerSource, sizeof(out.triggerSource), slot, out.usedFallbackTime);
 
@@ -441,7 +441,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
     out.triggerMatched = (nowTm.tm_hour == trigTm.tm_hour && nowTm.tm_min == trigTm.tm_min);
     if (input.enforceTriggerMinute && !out.triggerMatched) {
         setText(out.reason, sizeof(out.reason), "Slot ist zur gewählten Zeit nicht fällig.");
-        return out;
+        return;
     }
 
     if (!input.weatherAvailable || !input.weatherData) {
@@ -613,7 +613,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
     if (out.planCount == 0) {
         setText(out.reason, sizeof(out.reason), "Keine Pumpenzuweisung für den Slot.");
         out.action = WATER_ACTION_SKIP;
-        return out;
+        return;
     }
 
     if (runnableCount == 0) {
@@ -638,6 +638,4 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
         setText(out.reason, sizeof(out.reason), "Slot wird normal ausgeführt.");
         out.action = WATER_ACTION_EXECUTE;
     }
-
-    return out;
 }

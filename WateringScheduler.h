@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 #include "ConfigManager.h"
 #include "RelayManager.h"
 #include "WeatherManager.h"
@@ -11,6 +12,7 @@
 class WateringScheduler {
 public:
     WateringScheduler();
+    ~WateringScheduler();
 
     void begin(ConfigManager* cfg, RelayManager* rm, WeatherManager* wm);
     void update();  // call from main loop every iteration
@@ -46,4 +48,8 @@ private:
 
     // Track the last minute we checked to avoid double-firing
     time_t        _lastCheckedMinute = 0;
+
+    // Reusable decision result buffer allocated in PSRAM to avoid stack overflow.
+    // WateringDecisionResult is ~14 KB; the loopTask stack is only 8 KB.
+    WateringDecisionResult* _decisionBuf = nullptr;
 };

@@ -81,7 +81,7 @@ bool WeatherManager::fetchNow() {
         return false;
     }
 
-    http->begin(*secureClient, url);
+    http->begin(*secureClient, _lastRequestUrl);
     http->setTimeout(WEATHER_HTTP_TIMEOUT_MS);
     int code = http->GET();
     _lastHttpCode = code;

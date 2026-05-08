@@ -14,6 +14,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
 #include <math.h>
 #include <time.h>
 
@@ -243,6 +244,13 @@ static void handleStatus() {
     if (hw.relayCount > 0) {
         pumpHtml += "<h2 style='margin-top:4px;color:#1a6b3c'>💧 Pumpen (Live-Entscheidung)</h2>";
         pumpHtml += "<div class='table-wrap'><table class='compact-table'><tr><th>Pumpe</th><th>Status</th><th>Nächster Lauf</th><th>Entscheidung</th><th>Grund</th><th>Letzter Start/Stop</th></tr>";
+
+        // Allocate NextSlotDecisionInfo (~14 KB) in PSRAM once and reuse it
+        // across both loops to avoid overflowing the 8 KB loopTask stack.
+        NextSlotDecisionInfo* nextInfo = static_cast<NextSlotDecisionInfo*>(
+            heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!nextInfo) nextInfo = new (std::nothrow) NextSlotDecisionInfo();
+
         for (int i = 0; i < hw.relayCount; i++) {
             RelayManager::PumpRuntimeInfo rt;
             bool haveRt = rm && rm->getPumpRuntimeInfo(i, rt);
@@ -256,17 +264,18 @@ static void handleStatus() {
             String bestSlot = "–";
             WateringDecisionPumpPlan bestPlan;
             String bestWarnings = "";
-            for (int si = 0; si < sc.slotCount; si++) {
-                NextSlotDecisionInfo next;
-                if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next)) continue;
-                WateringDecisionPumpPlan pp;
-                if (!findPlanForPump(next.result, i, pp)) continue;
-                if (!foundNext || next.triggerTime < bestTs) {
-                    foundNext = true;
-                    bestTs = next.triggerTime;
-                    bestSlot = getSlotLabel(sc.slots[si], si);
-                    bestPlan = pp;
-                    bestWarnings = next.result.warnings;
+            if (nextInfo) {
+                for (int si = 0; si < sc.slotCount; si++) {
+                    if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo)) continue;
+                    WateringDecisionPumpPlan pp;
+                    if (!findPlanForPump(nextInfo->result, i, pp)) continue;
+                    if (!foundNext || nextInfo->triggerTime < bestTs) {
+                        foundNext = true;
+                        bestTs = nextInfo->triggerTime;
+                        bestSlot = getSlotLabel(sc.slots[si], si);
+                        bestPlan = pp;
+                        bestWarnings = nextInfo->result.warnings;
+                    }
                 }
             }
 
@@ -288,6 +297,7 @@ static void handleStatus() {
                         "</td><td>" + action + (foundNext ? (" (" + String(bestPlan.durationSec) + "s)") : "") +
                         "</td><td>" + reason + "</td><td>" + lastRun + "</td></tr>";
         }
+        free(nextInfo);
         pumpHtml += "</table></div>";
     } else {
         pumpHtml = "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
@@ -399,15 +409,20 @@ static void handleStatus() {
         String nextName = "–";
         String nextReason = "Kein nächster Slot gefunden.";
         bool fallbackActive = false;
-        for (int si = 0; si < sc.slotCount; si++) {
-            NextSlotDecisionInfo next;
-            if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next)) continue;
-            if (nextTs == 0 || next.triggerTime < nextTs) {
-                nextTs = next.triggerTime;
-                nextName = getSlotLabel(sc.slots[si], si);
-                nextReason = next.result.reason;
-                fallbackActive = next.result.usedFallbackTime;
+        NextSlotDecisionInfo* nextInfo2 = static_cast<NextSlotDecisionInfo*>(
+            heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!nextInfo2) nextInfo2 = new (std::nothrow) NextSlotDecisionInfo();
+        if (nextInfo2) {
+            for (int si = 0; si < sc.slotCount; si++) {
+                if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo2)) continue;
+                if (nextTs == 0 || nextInfo2->triggerTime < nextTs) {
+                    nextTs = nextInfo2->triggerTime;
+                    nextName = getSlotLabel(sc.slots[si], si);
+                    nextReason = nextInfo2->result.reason;
+                    fallbackActive = nextInfo2->result.usedFallbackTime;
+                }
             }
+            free(nextInfo2);
         }
         weatherHtml = "<div style='margin-top:12px;padding:10px;border:1px solid #dde7dd;border-radius:6px;background:#f8fff8'>"
                       "<b>Nächster Slot:</b> " + nextName + " @ " + formatDateTimeLocal(nextTs) +
@@ -1807,12 +1822,11 @@ static bool findNextSlotDecision(int slotIndex,
         in.slotIndex = slotIndex;
         in.enforceDayMatch = true;
         in.enforceTriggerMinute = true;
-        WateringDecisionResult res = WateringDecisionEngine::evaluateSlot(in);
-        if (!res.validInput || !res.dayMatched || !res.triggerMatched) continue;
+        WateringDecisionEngine::evaluateSlot(in, out.result);
+        if (!out.result.validInput || !out.result.dayMatched || !out.result.triggerMatched) continue;
 
         out.found = true;
         out.triggerTime = trigger;
-        out.result = res;
         return true;
     }
     return false;
@@ -1894,21 +1908,29 @@ static void handleApiWateringSimulate() {
     in.enforceDayMatch = true;
     in.enforceTriggerMinute = true;
 
-    WateringDecisionResult result = WateringDecisionEngine::evaluateSlot(in);
+    // Allocate decision result in PSRAM to avoid overflowing the 8 KB loopTask stack
+    WateringDecisionResult* result = static_cast<WateringDecisionResult*>(
+        heap_caps_calloc(1, sizeof(WateringDecisionResult), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!result) result = new (std::nothrow) WateringDecisionResult();
+    if (!result) {
+        g_server->send(500, "text/plain", "OOM");
+        return;
+    }
+    WateringDecisionEngine::evaluateSlot(in, *result);
 
     JsonDocument doc;
-    doc["ok"] = result.validInput;
-    doc["slotIndex"] = result.slotIndex;
-    doc["action"] = actionToText(result.action);
-    doc["reason"] = result.reason;
-    doc["weatherJustification"] = result.weatherJustification;
-    doc["warnings"] = result.warnings;
-    doc["triggerMatched"] = result.triggerMatched;
-    doc["dayMatched"] = result.dayMatched;
-    doc["triggerTime"] = formatTimeHM(result.triggerTime);
-    doc["triggerSource"] = result.triggerSource;
-    doc["totalDurationSec"] = result.totalDurationSec;
-    doc["planCount"] = result.planCount;
+    doc["ok"] = result->validInput;
+    doc["slotIndex"] = result->slotIndex;
+    doc["action"] = actionToText(result->action);
+    doc["reason"] = result->reason;
+    doc["weatherJustification"] = result->weatherJustification;
+    doc["warnings"] = result->warnings;
+    doc["triggerMatched"] = result->triggerMatched;
+    doc["dayMatched"] = result->dayMatched;
+    doc["triggerTime"] = formatTimeHM(result->triggerTime);
+    doc["triggerSource"] = result->triggerSource;
+    doc["totalDurationSec"] = result->totalDurationSec;
+    doc["planCount"] = result->planCount;
     if (weatherPtr) {
         doc["sunrise"] = formatTimeHM(weatherPtr->sunrise);
         doc["sunset"] = formatTimeHM(weatherPtr->sunset);
@@ -1922,19 +1944,20 @@ static void handleApiWateringSimulate() {
         }
     }
     JsonArray planArr = doc["plan"].to<JsonArray>();
-    for (int i = 0; i < result.planCount; i++) {
+    for (int i = 0; i < result->planCount; i++) {
         JsonObject p = planArr.add<JsonObject>();
         p["order"] = i + 1;
-        p["pumpIndex"] = result.plan[i].pumpIndex;
-        p["pumpName"] = getPumpLabel(hw, result.plan[i].pumpIndex);
-        p["baseDurationSec"] = result.plan[i].baseDurationSec;
-        p["durationSec"] = result.plan[i].durationSec;
-        p["adjustmentPercent"] = result.plan[i].adjustmentPercent;
-        p["action"] = actionToText(result.plan[i].action);
-        p["reason"] = result.plan[i].reason;
-        p["policySource"] = result.plan[i].policySource;
-        p["appliedRules"] = result.plan[i].appliedRules;
+        p["pumpIndex"] = result->plan[i].pumpIndex;
+        p["pumpName"] = getPumpLabel(hw, result->plan[i].pumpIndex);
+        p["baseDurationSec"] = result->plan[i].baseDurationSec;
+        p["durationSec"] = result->plan[i].durationSec;
+        p["adjustmentPercent"] = result->plan[i].adjustmentPercent;
+        p["action"] = actionToText(result->plan[i].action);
+        p["reason"] = result->plan[i].reason;
+        p["policySource"] = result->plan[i].policySource;
+        p["appliedRules"] = result->plan[i].appliedRules;
     }
+    free(result);
 
     String json;
     serializeJson(doc, json);
@@ -2036,10 +2059,18 @@ static void handleApiWateringStatus() {
     JsonArray slotsArr = doc["slots"].to<JsonArray>();
     time_t nextGlobalTs = 0;
     String nextGlobalName = "";
+
+    // Allocate NextSlotDecisionInfo (~14 KB) in PSRAM once and reuse across
+    // both the slots and pumps loops to avoid overflowing the 8 KB loopTask stack.
+    NextSlotDecisionInfo* nextInfo = static_cast<NextSlotDecisionInfo*>(
+        heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!nextInfo) nextInfo = new (std::nothrow) NextSlotDecisionInfo();
+
     for (int si = 0; si < sc.slotCount; si++) {
         const WateringSlot& slot = sc.slots[si];
-        NextSlotDecisionInfo next;
-        findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next);
+        if (nextInfo) {
+            findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo);
+        }
 
         JsonObject s = slotsArr.add<JsonObject>();
         s["slotIndex"] = si;
@@ -2047,30 +2078,30 @@ static void handleApiWateringStatus() {
         s["enabled"] = slot.enabled;
         s["repeatMode"] = slot.repeatMode == REPEAT_INTERVAL_DAYS ? "interval" : "weekdays";
         s["repeatRule"] = describeRepeatRule(slot);
-        s["nextTrigger"] = next.found ? formatDateTimeLocal(next.triggerTime) : String("–");
-        s["nextAction"] = next.found ? actionToText(next.result.action) : "skip";
-        s["reason"] = next.found ? String(next.result.reason) : String("Kein nächster Lauf gefunden.");
-        s["triggerSource"] = next.found ? String(next.result.triggerSource) : String("");
-        s["warnings"] = next.found ? String(next.result.warnings) : String("");
+        s["nextTrigger"] = (nextInfo && nextInfo->found) ? formatDateTimeLocal(nextInfo->triggerTime) : String("–");
+        s["nextAction"] = (nextInfo && nextInfo->found) ? actionToText(nextInfo->result.action) : "skip";
+        s["reason"] = (nextInfo && nextInfo->found) ? String(nextInfo->result.reason) : String("Kein nächster Lauf gefunden.");
+        s["triggerSource"] = (nextInfo && nextInfo->found) ? String(nextInfo->result.triggerSource) : String("");
+        s["warnings"] = (nextInfo && nextInfo->found) ? String(nextInfo->result.warnings) : String("");
 
         JsonArray plan = s["plan"].to<JsonArray>();
-        if (next.found) {
-            for (int i = 0; i < next.result.planCount; i++) {
+        if (nextInfo && nextInfo->found) {
+            for (int i = 0; i < nextInfo->result.planCount; i++) {
                 JsonObject p = plan.add<JsonObject>();
-                p["pumpIndex"] = next.result.plan[i].pumpIndex;
-                p["pumpName"] = getPumpLabel(hw, next.result.plan[i].pumpIndex);
-                p["action"] = actionToText(next.result.plan[i].action);
-                p["durationSec"] = next.result.plan[i].durationSec;
-                p["baseDurationSec"] = next.result.plan[i].baseDurationSec;
-                p["adjustmentPercent"] = next.result.plan[i].adjustmentPercent;
-                p["reason"] = next.result.plan[i].reason;
-                p["policySource"] = next.result.plan[i].policySource;
-                p["appliedRules"] = next.result.plan[i].appliedRules;
+                p["pumpIndex"] = nextInfo->result.plan[i].pumpIndex;
+                p["pumpName"] = getPumpLabel(hw, nextInfo->result.plan[i].pumpIndex);
+                p["action"] = actionToText(nextInfo->result.plan[i].action);
+                p["durationSec"] = nextInfo->result.plan[i].durationSec;
+                p["baseDurationSec"] = nextInfo->result.plan[i].baseDurationSec;
+                p["adjustmentPercent"] = nextInfo->result.plan[i].adjustmentPercent;
+                p["reason"] = nextInfo->result.plan[i].reason;
+                p["policySource"] = nextInfo->result.plan[i].policySource;
+                p["appliedRules"] = nextInfo->result.plan[i].appliedRules;
             }
         }
 
-        if (next.found && (nextGlobalTs == 0 || next.triggerTime < nextGlobalTs)) {
-            nextGlobalTs = next.triggerTime;
+        if (nextInfo && nextInfo->found && (nextGlobalTs == 0 || nextInfo->triggerTime < nextGlobalTs)) {
+            nextGlobalTs = nextInfo->triggerTime;
             nextGlobalName = getSlotLabel(slot, si);
         }
     }
@@ -2094,18 +2125,21 @@ static void handleApiWateringStatus() {
         time_t bestTs = 0;
         String bestSlot = "–";
         WateringDecisionPumpPlan bestPlan;
-        WateringDecisionResult bestResult;
-        for (int si = 0; si < sc.slotCount; si++) {
-            NextSlotDecisionInfo next;
-            if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next)) continue;
-            WateringDecisionPumpPlan pp;
-            if (!findPlanForPump(next.result, pi, pp)) continue;
-            if (!foundPumpNext || next.triggerTime < bestTs) {
-                foundPumpNext = true;
-                bestTs = next.triggerTime;
-                bestSlot = getSlotLabel(sc.slots[si], si);
-                bestPlan = pp;
-                bestResult = next.result;
+        char bestTriggerSource[96] = "";
+        char bestWarnings[160] = "";
+        if (nextInfo) {
+            for (int si = 0; si < sc.slotCount; si++) {
+                if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo)) continue;
+                WateringDecisionPumpPlan pp;
+                if (!findPlanForPump(nextInfo->result, pi, pp)) continue;
+                if (!foundPumpNext || nextInfo->triggerTime < bestTs) {
+                    foundPumpNext = true;
+                    bestTs = nextInfo->triggerTime;
+                    bestSlot = getSlotLabel(sc.slots[si], si);
+                    bestPlan = pp;
+                    strlcpy(bestTriggerSource, nextInfo->result.triggerSource, sizeof(bestTriggerSource));
+                    strlcpy(bestWarnings, nextInfo->result.warnings, sizeof(bestWarnings));
+                }
             }
         }
         p["nextSlot"] = foundPumpNext ? bestSlot : String("–");
@@ -2114,10 +2148,11 @@ static void handleApiWateringStatus() {
         p["nextReason"] = foundPumpNext ? String(bestPlan.reason) : String("Keine Zuweisung.");
         p["nextDurationSec"] = foundPumpNext ? bestPlan.durationSec : 0;
         p["adjustmentPercent"] = foundPumpNext ? bestPlan.adjustmentPercent : 0;
-        p["triggerSource"] = foundPumpNext ? String(bestResult.triggerSource) : String("");
-        p["warnings"] = foundPumpNext ? String(bestResult.warnings) : String("");
+        p["triggerSource"] = foundPumpNext ? String(bestTriggerSource) : String("");
+        p["warnings"] = foundPumpNext ? String(bestWarnings) : String("");
         p["appliedRules"] = foundPumpNext ? String(bestPlan.appliedRules) : String("");
     }
+    free(nextInfo);
 
     JsonArray warnings = doc["warnings"].to<JsonArray>();
     if (weatherStale) warnings.add("Wetterdaten sind veraltet.");
