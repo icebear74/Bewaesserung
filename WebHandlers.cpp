@@ -107,6 +107,7 @@ static String formatDateTimeLocal(time_t ts);
 static String getSlotLabel(const WateringSlot& slot, int idx);
 static String getPumpLabel(const HardwareConfig& hw, int idx);
 static const char* actionToText(WateringDecisionAction action);
+static const char* actionToLabelDe(WateringDecisionAction action);
 
 struct NextSlotDecisionInfo {
     bool found = false;
