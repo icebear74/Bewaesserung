@@ -44,9 +44,9 @@ bool WeatherManager::fetchNow() {
         return false;
     }
 
-    // Build Open-Meteo URL (HTTPS; no API key required)
-    char url[512];
-    snprintf(url, sizeof(url),
+    // Build Open-Meteo URL directly into the class-member buffer (avoids a
+    // 512-byte stack allocation; _lastRequestUrl lives on the heap with the object)
+    snprintf(_lastRequestUrl, sizeof(_lastRequestUrl),
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
@@ -56,35 +56,53 @@ bool WeatherManager::fetchNow() {
         "precipitation_probability_max,temperature_2m_max,temperature_2m_min"
         "&forecast_days=1&forecast_hours=24&timezone=auto",
         dc.latitude, dc.longitude);
-    strlcpy(_lastRequestUrl, url, sizeof(_lastRequestUrl));
     _lastError[0] = '\0';
     Serial.printf("[Weather] Request URL: %s\n", _lastRequestUrl);
 
-    // Use WiFiClientSecure; certificate verification is skipped because
-    // embedding the full CA chain in firmware is impractical.  Traffic is
-    // still encrypted via TLS, protecting against passive interception.
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure();
+    // Heap-allocate WiFiClientSecure and HTTPClient to avoid overflowing the
+    // loopTask stack: mbedTLS requires ~4-6 KB of stack for TLS operations,
+    // which exceeds the ESP32 default 8 KB loopTask stack when combined with
+    // the rest of the call chain.
+    WiFiClientSecure* secureClient = new (std::nothrow) WiFiClientSecure();
+    if (!secureClient) {
+        snprintf(_lastError, sizeof(_lastError), "OOM: WiFiClientSecure alloc failed");
+        Serial.println("[Weather] OOM: failed to allocate WiFiClientSecure.");
+        _lastFetchMs = millis();
+        return false;
+    }
+    secureClient->setInsecure();
 
-    HTTPClient http;
-    http.begin(secureClient, url);
-    http.setTimeout(WEATHER_HTTP_TIMEOUT_MS);
-    int code = http.GET();
+    HTTPClient* http = new (std::nothrow) HTTPClient();
+    if (!http) {
+        snprintf(_lastError, sizeof(_lastError), "OOM: HTTPClient alloc failed");
+        Serial.println("[Weather] OOM: failed to allocate HTTPClient.");
+        delete secureClient;
+        _lastFetchMs = millis();
+        return false;
+    }
+
+    http->begin(*secureClient, url);
+    http->setTimeout(WEATHER_HTTP_TIMEOUT_MS);
+    int code = http->GET();
     _lastHttpCode = code;
     if (code != 200) {
-        String errBody = http.getString();
+        String errBody = http->getString();
         snprintf(_lastError, sizeof(_lastError), "HTTP %d: %.220s", code, errBody.c_str());
         Serial.printf("[Weather] HTTP error %d from Open-Meteo.\n", code);
         if (errBody.length()) {
             Serial.printf("[Weather] Error body: %s\n", errBody.c_str());
         }
-        http.end();
+        http->end();
+        delete http;
+        delete secureClient;
         _lastFetchMs = millis();  // back off; don't retry immediately
         return false;
     }
 
-    String body = http.getString();
-    http.end();
+    String body = http->getString();
+    http->end();
+    delete http;
+    delete secureClient;
 
     bool ok = parseResponse(body);
     if (ok) {
