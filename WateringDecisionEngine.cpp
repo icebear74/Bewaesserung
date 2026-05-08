@@ -396,7 +396,6 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
     // only applies to initialisation, not assignment), which overflows the loopTask stack
     // and corrupts heap metadata.
     memset(&out, 0, sizeof(out));
-    out.slotIndex = -1;  // only non-zero default in WateringDecisionResult
     out.slotIndex = input.slotIndex;
 
     if (!input.slotConfig || !input.hardwareConfig ||
