@@ -239,7 +239,7 @@ static void handleStatus() {
     time_t now = time(nullptr);
     if (hw.relayCount > 0) {
         pumpHtml += "<h2 style='margin-top:4px;color:#1a6b3c'>💧 Pumpen (Live-Entscheidung)</h2>";
-        pumpHtml += "<table><tr><th>Pumpe</th><th>Status</th><th>Nächster Lauf</th><th>Entscheidung</th><th>Grund</th><th>Letzter Start/Stop</th></tr>";
+        pumpHtml += "<div class='table-wrap'><table class='compact-table'><tr><th>Pumpe</th><th>Status</th><th>Nächster Lauf</th><th>Entscheidung</th><th>Grund</th><th>Letzter Start/Stop</th></tr>";
         for (int i = 0; i < hw.relayCount; i++) {
             RelayManager::PumpRuntimeInfo rt;
             bool haveRt = rm && rm->getPumpRuntimeInfo(i, rt);
@@ -282,7 +282,7 @@ static void handleStatus() {
                         "</td><td>" + action + (foundNext ? (" (" + String(bestPlan.durationSec) + "s)") : "") +
                         "</td><td>" + reason + "</td><td>" + lastRun + "</td></tr>";
         }
-        pumpHtml += "</table>";
+        pumpHtml += "</table></div>";
     } else {
         pumpHtml = "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
     }
@@ -1038,6 +1038,70 @@ static String getPumpLabel(const HardwareConfig& hw, int idx) {
     return hw.pumps[idx].name[0] ? String(hw.pumps[idx].name) : ("Pumpe " + String(idx + 1));
 }
 
+static String getWeatherTemplateLabel(const SlotConfig& sc, int idx) {
+    if (idx < 0 || idx >= sc.weatherTemplateCount) return "Kein Template";
+    return sc.weatherTemplates[idx].name[0]
+        ? String(sc.weatherTemplates[idx].name)
+        : ("Wetter " + String(idx + 1));
+}
+
+static String buildWeatherTemplateRowHtml(int wi, const WeatherTemplate& wt) {
+    String label = wt.name[0] ? String(wt.name) : ("Wetter " + String(wi + 1));
+    String html;
+    html.reserve(1200);
+    html += "<div class=\"pump-entry\" id=\"wt";
+    html += wi;
+    html += "\" style=\"border:1px solid #cfe0f6;padding:12px;margin-bottom:12px;border-radius:6px;background:#f7fbff\">";
+    html += "<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\">";
+    html += "<b style=\"font-size:1.05em\">🌦️ ";
+    html += label;
+    html += "</b>";
+    html += "<div style=\"display:flex;gap:6px;flex-wrap:wrap\">";
+    html += "<button type=\"button\" onclick=\"editWeatherTemplate(";
+    html += wi;
+    html += ")\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>";
+    html += "<button type=\"button\" onclick=\"deleteWeatherTemplate(";
+    html += wi;
+    html += ")\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
+    html += "</div></div>";
+    html += "<div class=\"form-row\"><div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"wt";
+    html += wi;
+    html += "_name\" value=\"";
+    html += String(wt.name);
+    html += "\" maxlength=\"31\" oninput=\"updateWeatherTemplateHeading(";
+    html += wi;
+    html += ",this)\" required></div></div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_skipRainMm\" value=\"";
+    html += wt.weather.skipIfRainMm;
+    html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div>";
+    html += "<div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_skipRainPct\" value=\"";
+    html += wt.weather.skipIfRainPct;
+    html += "\" min=\"0\" max=\"100\"></div>";
+    html += "</div><div class=\"form-row\">";
+    html += "<div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_aboveTemp\" value=\"";
+    html += wt.weather.runOnlyAboveTemp;
+    html += "\" min=\"-99\" max=\"60\" step=\"0.5\"></div>";
+    html += "<div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_reduceRainMm\" value=\"";
+    html += wt.weather.reduceIfRainMm;
+    html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div>";
+    html += "<div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_reducePct\" value=\"";
+    html += wt.weather.reducePct;
+    html += "\" min=\"1\" max=\"99\"></div>";
+    html += "</div></div>";
+    return html;
+}
+
 static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig& hw) {
     String html;
     int displayIdx = 0;
@@ -1045,21 +1109,21 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         const SlotPumpAssignment& a = sc.assignments[ai];
         if (a.slotIndex >= (uint8_t)sc.slotCount) continue;
         if (a.pumpIndex >= (uint8_t)hw.relayCount) continue;
-        const WateringSlot& slot = sc.slots[a.slotIndex];
-        bool legacyActive = slot.skipIfRainMm > 0.0f || slot.skipIfRainPct > 0.0f ||
-                            slot.runOnlyAboveTemp > -99.0f || slot.reduceIfRainMm > 0.0f;
-        bool usePolicyUi = a.useOwnWeatherPolicy || legacyActive;
-        WeatherPolicy wp = a.useOwnWeatherPolicy ? a.weather : WeatherPolicy{
-            slot.skipIfRainMm,
-            slot.skipIfRainPct,
-            slot.runOnlyAboveTemp,
-            slot.reduceIfRainMm,
-            slot.reducePct
-        };
-
-        html += "<div class=\"form-row\" style=\"margin-top:6px;align-items:center\" id=\"asrow";
+        html += "<div class=\"pump-entry\" id=\"asrow";
         html += displayIdx;
-        html += "\">";
+        html += "\" style=\"border:1px solid #eadfb7;padding:12px;margin-bottom:12px;border-radius:6px;background:#fffdf5\">";
+        html += "<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\">";
+        html += "<b style=\"font-size:1.05em\">🔗 Zuweisung ";
+        html += displayIdx + 1;
+        html += "</b>";
+        html += "<div style=\"display:flex;gap:6px;flex-wrap:wrap\">";
+        html += "<button type=\"button\" onclick=\"editAssignment(";
+        html += displayIdx;
+        html += ")\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>";
+        html += "<button type=\"button\" onclick=\"deleteAssignment(";
+        html += displayIdx;
+        html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
+        html += "</div></div><div class=\"form-row\">";
         html += "<div class=\"form-col\"><label>Slot</label><select name=\"as";
         html += displayIdx;
         html += "_slot\">";
@@ -1080,6 +1144,23 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
             if (a.pumpIndex == (uint8_t)pi) html += " selected";
             html += ">";
             html += getPumpLabel(hw, pi);
+        html += "</option>";
+        }
+        html += "</select></div>";
+
+        html += "<div class=\"form-col\"><label>Wetter-Template</label><select name=\"as";
+        html += displayIdx;
+        html += "_weatherTemplate\">";
+        html += "<option value=\"-1\"";
+        if (a.weatherTemplateIndex < 0) html += " selected";
+        html += ">Kein Template</option>";
+        for (int wi = 0; wi < sc.weatherTemplateCount; wi++) {
+            html += "<option value=\"";
+            html += wi;
+            html += "\"";
+            if (a.weatherTemplateIndex == wi) html += " selected";
+            html += ">";
+            html += getWeatherTemplateLabel(sc, wi);
             html += "</option>";
         }
         html += "</select></div>";
@@ -1089,51 +1170,6 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         html += "_duration\" value=\"";
         html += a.durationSec;
         html += "\" min=\"1\" max=\"7200\"></div>";
-        html += "<div class=\"form-col\"><label>Wetter-Policy</label><select name=\"as";
-        html += displayIdx;
-        html += "_weatherMode\" onchange=\"onAssignmentWeatherModeChange(";
-        html += displayIdx;
-        html += ",this.value)\"><option value=\"none\">Ignorieren</option><option value=\"policy\"";
-        if (usePolicyUi) html += " selected";
-        html += ">Eigene Policy</option></select></div>";
-        html += "<div id=\"asweather";
-        html += displayIdx;
-        html += "\" style=\"display:";
-        html += (usePolicyUi ? "block" : "none");
-        html += ";width:100%\"><div class=\"form-row\"><div class=\"form-col\">";
-        html += "<label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"as";
-        html += displayIdx;
-        html += "_skipRainMm\" value=\"";
-        html += wp.skipIfRainMm;
-        html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\">";
-        html += "<label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"as";
-        html += displayIdx;
-        html += "_skipRainPct\" value=\"";
-        html += wp.skipIfRainPct;
-        html += "\" min=\"0\" max=\"100\"></div></div><div class=\"form-row\"><div class=\"form-col\">";
-        html += "<label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"as";
-        html += displayIdx;
-        html += "_aboveTemp\" value=\"";
-        html += wp.runOnlyAboveTemp;
-        html += "\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\">";
-        html += "<label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"as";
-        html += displayIdx;
-        html += "_reduceRainMm\" value=\"";
-        html += wp.reduceIfRainMm;
-        html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\">";
-        html += "<label>Reduktion (%)</label><input type=\"number\" name=\"as";
-        html += displayIdx;
-        html += "_reducePct\" value=\"";
-        html += wp.reducePct;
-        html += "\" min=\"1\" max=\"99\"></div></div></div>";
-
-        html += "<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">";
-        html += "<button type=\"button\" onclick=\"editAssignment(";
-        html += displayIdx;
-        html += ")\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>";
-        html += "<button type=\"button\" onclick=\"deleteAssignment(";
-        html += displayIdx;
-        html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
         html += "</div></div>";
         displayIdx++;
     }
@@ -1144,7 +1180,7 @@ static String buildPumpSlotOverviewHtml(const SlotConfig& sc, const HardwareConf
     if (hw.relayCount == 0) {
         return "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
     }
-    String html = "<table><tr><th>Pumpe</th><th>Zugewiesene Slots</th></tr>";
+    String html = "<div class='table-wrap'><table class='compact-table'><tr><th>Pumpe</th><th>Zugewiesene Kombinationen</th></tr>";
     for (int pi = 0; pi < hw.relayCount; pi++) {
         html += "<tr><td>";
         html += getPumpLabel(hw, pi);
@@ -1155,6 +1191,8 @@ static String buildPumpSlotOverviewHtml(const SlotConfig& sc, const HardwareConf
             if (a.pumpIndex != (uint8_t)pi || a.slotIndex >= (uint8_t)sc.slotCount) continue;
             if (found) html += "<br>";
             html += getSlotLabel(sc.slots[a.slotIndex], a.slotIndex);
+            html += " · ";
+            html += getWeatherTemplateLabel(sc, a.weatherTemplateIndex);
             html += " (";
             html += a.durationSec;
             html += "s)";
@@ -1163,7 +1201,7 @@ static String buildPumpSlotOverviewHtml(const SlotConfig& sc, const HardwareConf
         if (!found) html += "<span style='color:#999'>Keine Zuweisung</span>";
         html += "</td></tr>";
     }
-    html += "</table>";
+    html += "</table></div>";
     return html;
 }
 
@@ -1179,11 +1217,11 @@ static void handleConfigWatering() {
     if (cfg->isWateringConfigValid()) {
         char buf[100];
         snprintf(buf, sizeof(buf),
-                 "<p style='color:#1a6b3c;margin-top:8px'>&#10003; %d Slot(s), %d Zuweisung(en), %d Pumpe(n).</p>",
-                 sc.slotCount, sc.assignCount, hw.relayCount);
+                 "<p style='color:#1a6b3c;margin-top:8px'>&#10003; %d Slot(s), %d Wetter-Template(s), %d Zuweisung(en), %d Pumpe(n).</p>",
+                 sc.slotCount, sc.weatherTemplateCount, sc.assignCount, hw.relayCount);
         wateringStatus = buf;
     } else {
-        wateringStatus = "<p style='color:#dc3545;margin-top:8px'>&#10007; Kein g&#252;ltiger Plan: Pumpen konfigurieren und Slots anlegen.</p>";
+        wateringStatus = "<p style='color:#dc3545;margin-top:8px'>&#10007; Kein g&#252;ltiger Plan: Pumpen konfigurieren, Slots anlegen und Zuweisungen speichern.</p>";
     }
     page = replaceToken(page, "{watering_status}", wateringStatus);
 
@@ -1210,8 +1248,19 @@ static void handleConfigWatering() {
         serializeJson(arr, slotNamesJson);
         page = replaceToken(page, "{slot_names_json}", slotNamesJson);
     }
+    {
+        JsonDocument weatherTemplateNamesDoc;
+        JsonArray arr = weatherTemplateNamesDoc.to<JsonArray>();
+        for (int i = 0; i < sc.weatherTemplateCount; i++) {
+            arr.add(getWeatherTemplateLabel(sc, i));
+        }
+        String weatherTemplateNamesJson;
+        serializeJson(arr, weatherTemplateNamesJson);
+        page = replaceToken(page, "{weather_template_names_json}", weatherTemplateNamesJson);
+    }
     page = replaceToken(page, "{pumpCount}", String(hw.relayCount));
     page = replaceToken(page, "{slotCount}", String(sc.slotCount));
+    page = replaceToken(page, "{weatherTemplateCount}", String(sc.weatherTemplateCount));
     page = replaceToken(page, "{assignCount}", String(sc.assignCount));
 
     // Build slot rows
@@ -1219,11 +1268,17 @@ static void handleConfigWatering() {
     for (int i = 0; i < sc.slotCount; i++) {
         slotRowsHtml += buildSlotRowHtml(i, sc.slots[i], sc, hw);
     }
+    String weatherTemplateRowsHtml;
+    for (int i = 0; i < sc.weatherTemplateCount; i++) {
+        weatherTemplateRowsHtml += buildWeatherTemplateRowHtml(i, sc.weatherTemplates[i]);
+    }
     String assignmentRowsHtml = buildAssignmentRowsHtml(sc, hw);
     page = replaceToken(page, "{slot_rows_html}", slotRowsHtml);
+    page = replaceToken(page, "{weather_template_rows_html}", weatherTemplateRowsHtml);
     page = replaceToken(page, "{assignment_rows_html}", assignmentRowsHtml);
     page = replaceToken(page, "{pump_assignment_overview_html}", buildPumpSlotOverviewHtml(sc, hw));
     page = replaceToken(page, "{noSlotsMsg}", sc.slotCount == 0 ? "block" : "none");
+    page = replaceToken(page, "{noWeatherTemplatesMsg}", sc.weatherTemplateCount == 0 ? "block" : "none");
     page = replaceToken(page, "{noAssignmentsMsg}", sc.assignCount == 0 ? "block" : "none");
 
     g_server->send(200, "text/html; charset=UTF-8", page);
@@ -1327,6 +1382,38 @@ static void handleSaveWatering() {
         newSc.slotCount++;
     }
 
+    int weatherTemplateCount = constrain(
+        g_server->hasArg("weatherTemplateCount") ? g_server->arg("weatherTemplateCount").toInt() : 0,
+        0, MAX_WEATHER_TEMPLATES);
+    int templateRemap[MAX_WEATHER_TEMPLATES];
+    for (int i = 0; i < MAX_WEATHER_TEMPLATES; i++) templateRemap[i] = -1;
+    for (int wi = 0; wi < weatherTemplateCount; wi++) {
+        if (newSc.weatherTemplateCount >= MAX_WEATHER_TEMPLATES) break;
+
+        char key[32];
+        snprintf(key, sizeof(key), "wt%d_name", wi);
+        if (!g_server->hasArg(key)) continue;
+
+        int mappedTemplateIndex = newSc.weatherTemplateCount;
+        templateRemap[wi] = mappedTemplateIndex;
+        WeatherTemplate& wt = newSc.weatherTemplates[mappedTemplateIndex];
+        wt = WeatherTemplate{};
+        strlcpy(wt.name, g_server->arg(key).c_str(), sizeof(wt.name));
+
+        snprintf(key, sizeof(key), "wt%d_skipRainMm", wi);
+        wt.weather.skipIfRainMm = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
+        snprintf(key, sizeof(key), "wt%d_skipRainPct", wi);
+        wt.weather.skipIfRainPct = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
+        snprintf(key, sizeof(key), "wt%d_aboveTemp", wi);
+        wt.weather.runOnlyAboveTemp = g_server->hasArg(key) ? g_server->arg(key).toFloat() : -99.0f;
+        snprintf(key, sizeof(key), "wt%d_reduceRainMm", wi);
+        wt.weather.reduceIfRainMm = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
+        snprintf(key, sizeof(key), "wt%d_reducePct", wi);
+        wt.weather.reducePct = (uint8_t)constrain(
+            g_server->hasArg(key) ? g_server->arg(key).toInt() : 50, 1, 99);
+        newSc.weatherTemplateCount++;
+    }
+
     int assignCount = constrain(
         g_server->hasArg("assignCount") ? g_server->arg("assignCount").toInt() : 0,
         0, MAX_SLOT_ASSIGNMENTS * 4);
@@ -1350,20 +1437,13 @@ static void handleSaveWatering() {
         a.slotIndex = (uint8_t)newSlotIndex;
         a.pumpIndex = (uint8_t)pumpIndex;
         a.durationSec = durationSec;
-        snprintf(akey, sizeof(akey), "as%d_weatherMode", ai);
-        String wm = g_server->hasArg(akey) ? g_server->arg(akey) : "none";
-        a.useOwnWeatherPolicy = (wm == "policy");
-        snprintf(akey, sizeof(akey), "as%d_skipRainMm", ai);
-        a.weather.skipIfRainMm = g_server->hasArg(akey) ? g_server->arg(akey).toFloat() : 0.0f;
-        snprintf(akey, sizeof(akey), "as%d_skipRainPct", ai);
-        a.weather.skipIfRainPct = g_server->hasArg(akey) ? g_server->arg(akey).toFloat() : 0.0f;
-        snprintf(akey, sizeof(akey), "as%d_aboveTemp", ai);
-        a.weather.runOnlyAboveTemp = g_server->hasArg(akey) ? g_server->arg(akey).toFloat() : -99.0f;
-        snprintf(akey, sizeof(akey), "as%d_reduceRainMm", ai);
-        a.weather.reduceIfRainMm = g_server->hasArg(akey) ? g_server->arg(akey).toFloat() : 0.0f;
-        snprintf(akey, sizeof(akey), "as%d_reducePct", ai);
-        a.weather.reducePct = (uint8_t)constrain(
-            g_server->hasArg(akey) ? g_server->arg(akey).toInt() : 50, 1, 99);
+        snprintf(akey, sizeof(akey), "as%d_weatherTemplate", ai);
+        int oldTemplateIndex = g_server->hasArg(akey) ? g_server->arg(akey).toInt() : -1;
+        a.weatherTemplateIndex =
+            (oldTemplateIndex >= 0 && oldTemplateIndex < MAX_WEATHER_TEMPLATES)
+                ? (int8_t)templateRemap[oldTemplateIndex]
+                : (int8_t)-1;
+        a.useOwnWeatherPolicy = false;
     }
 
     sc = newSc;
@@ -1373,8 +1453,8 @@ static void handleSaveWatering() {
     String page = buildPage(HTML_SAVED_LIVE);
     page = replaceToken(page, "{saved_back_url}", "/config_watering");
     g_server->send(200, "text/html; charset=UTF-8", page);
-    Serial.printf("[Web] POST /save_watering – %d slot(s), %d assignment(s) saved.\n",
-                  sc.slotCount, sc.assignCount);
+    Serial.printf("[Web] POST /save_watering – %d slot(s), %d weather template(s), %d assignment(s) saved.\n",
+                  sc.slotCount, sc.weatherTemplateCount, sc.assignCount);
 }
 
 static time_t parseLocalDateTimeArg(const String& value) {

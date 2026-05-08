@@ -16,7 +16,7 @@ body{font-family:Arial,sans-serif;background:#f5f5f5;color:#333}
 .navbar a{color:#fff;text-decoration:none;padding:6px 12px;border-radius:4px;font-size:14px;font-weight:bold}
 .navbar a:hover{background:rgba(255,255,255,0.2)}
 .navbar .brand{color:#fff;font-size:18px;font-weight:bold;margin-right:8px}
-.container{max-width:800px;margin:24px auto;padding:0 16px}
+.container{max-width:1180px;margin:24px auto;padding:0 16px}
 .card{background:#fff;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);padding:24px;margin-bottom:20px}
 h1{font-size:22px;margin-bottom:16px;color:#1a6b3c}
 h2{font-size:18px;margin-bottom:12px;color:#333}
@@ -38,6 +38,14 @@ input[type=checkbox]{width:auto;margin-right:8px}
 .form-row{display:flex;gap:12px;flex-wrap:wrap}
 .form-col{flex:1;min-width:200px}
 #map{height:300px;border-radius:4px;margin-bottom:14px;border:1px solid #ccc}
+.table-wrap{width:100%;overflow-x:auto}
+.compact-table th,.compact-table td{padding:8px 10px;vertical-align:top}
+.status-layout{display:grid;grid-template-columns:minmax(280px,360px) minmax(0,1fr);gap:16px;align-items:start}
+.status-panel{background:#fcfcfc;border:1px solid #e8ece8;border-radius:8px;padding:16px}
+.config-section{margin-top:18px;padding-top:18px;border-top:1px solid #eef2ee}
+.section-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.hint-text{color:#667;font-size:13px;line-height:1.5}
+@media (max-width:900px){.status-layout{grid-template-columns:1fr}.card{padding:18px}.container{padding:0 12px}}
 </style>
 </head>
 <body>
@@ -73,8 +81,8 @@ const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
   <h1>&#128202; Systemstatus</h1>
   {ds3231_warning}
   {watering_locked_warning}
-  <div style="display:flex;gap:16px;flex-wrap:wrap">
-    <div style="flex:1;min-width:240px">
+  <div class="status-layout">
+    <div class="status-panel">
       <h2 style="margin-bottom:8px">&#128421;&#65039; System</h2>
       <table>
         <tr><td>Systemzustand</td><td><b>{state_str}</b></td></tr>
@@ -87,7 +95,7 @@ const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
         <tr><td>Offline-Modus</td><td>{offline_mode}</td></tr>
       </table>
     </div>
-    <div style="flex:1;min-width:240px">
+    <div class="status-panel">
       {pump_status_html}
     </div>
   </div>
@@ -433,38 +441,64 @@ function testRelay(idx,action){
 
 // ─── Watering Config Page ─────────────────────────────────────────────────────
 // Tokens: {watering_status} {pumpCount} {pump_names_json} {slotCount} {slot_names_json}
-//         {slot_rows_html} {assignCount} {assignment_rows_html} {pump_assignment_overview_html}
+//         {weatherTemplateCount} {weather_template_names_json}
+//         {slot_rows_html} {weather_template_rows_html} {assignCount}
+//         {assignment_rows_html} {pump_assignment_overview_html}
 
 const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#128167; Bew&#228;sserungsplan</h1>
   {watering_status}
   <div class="alert-info">
-    &#128161; <b>1) Slots definieren:</b> reine Zeittrigger + Wiederholung.<br>
-    <b>2) Pumpen zu Slots zuweisen:</b> separat als Liste (Bacula-ähnlich).<br>
-    <b>3) Wetter-Policy:</b> pro Pumpen-Zuweisung (nicht im Slot).<br>
-    Beide Pfade (Live + Testlauf) nutzen dieselbe Entscheidungs-Engine.
+    &#128161; <b>1) Slots</b> definieren nur Zeit und Wiederholung.<br>
+    <b>2) Wetter-Templates</b> enthalten alle Wetterregeln zentral.<br>
+    <b>3) Pumpen-Zuweisungen</b> verbinden Slot + Wetter-Template (oder kein Template) + Pumpe.
   </div>
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
     <input type="hidden" id="slotCount" name="slotCount" value="{slotCount}">
+    <input type="hidden" id="weatherTemplateCount" name="weatherTemplateCount" value="{weatherTemplateCount}">
     <input type="hidden" id="assignCount" name="assignCount" value="{assignCount}">
 
-    <h2 style="color:#1a6b3c;margin-top:8px">1) Slots</h2>
-    <div id="slots">{slot_rows_html}</div>
-    <div id="noSlotsMsg" style="display:{noSlotsMsg};color:#999;font-style:italic;margin-bottom:8px">
-      Noch kein Slot angelegt. Slot hinzuf&#252;gen &#8594;
+    <div class="config-section" style="margin-top:8px;padding-top:0;border-top:none">
+      <h2 style="color:#1a6b3c">1) Slots</h2>
+      <div class="hint-text" style="margin-bottom:10px">Slots beschreiben nur den Zeitpunkt und die Wiederholung.</div>
+      <div id="slots">{slot_rows_html}</div>
+      <div id="noSlotsMsg" style="display:{noSlotsMsg};color:#999;font-style:italic;margin-bottom:8px">
+        Noch kein Slot angelegt. Slot hinzuf&#252;gen &#8594;
+      </div>
+      <div class="section-toolbar">
+        <button type="button" class="btn" onclick="addSlot()" style="background:#17a2b8">+ Slot hinzuf&#252;gen</button>
+      </div>
     </div>
-    <button type="button" class="btn" onclick="addSlot()" style="background:#17a2b8">+ Slot hinzuf&#252;gen</button>
 
-    <h2 style="color:#1a6b3c;margin-top:18px">2) Pumpen-Zuweisungen</h2>
-    <div id="assignRows">{assignment_rows_html}</div>
-    <div id="noAssignmentsMsg" style="display:{noAssignmentsMsg};color:#999;font-style:italic;margin-bottom:8px">
-      Noch keine Pumpenzuweisung vorhanden.
+    <div class="config-section">
+      <h2 style="color:#1a6b3c">2) Wetter-Templates</h2>
+      <div class="hint-text" style="margin-bottom:10px">Templates k&ouml;nnen mehreren Pumpen-Zuweisungen zugeordnet werden.</div>
+      <div id="weatherTemplates">{weather_template_rows_html}</div>
+      <div id="noWeatherTemplatesMsg" style="display:{noWeatherTemplatesMsg};color:#999;font-style:italic;margin-bottom:8px">
+        Noch kein Wetter-Template angelegt. Optional, aber f&uuml;r Wiederverwendung empfohlen.
+      </div>
+      <div class="section-toolbar">
+        <button type="button" class="btn" onclick="addWeatherTemplate()" style="background:#17a2b8">+ Wetter-Template hinzuf&#252;gen</button>
+      </div>
     </div>
-    <button type="button" class="btn" onclick="addAssignment()" style="background:#17a2b8">+ Zuweisung hinzuf&#252;gen</button>
 
-    <h2 style="color:#1a6b3c;margin-top:18px">3) Pumpen &#8594; Slots &#220;bersicht</h2>
-    <div id="pumpSlotOverview">{pump_assignment_overview_html}</div>
+    <div class="config-section">
+      <h2 style="color:#1a6b3c">3) Pumpen-Zuweisungen</h2>
+      <div class="hint-text" style="margin-bottom:10px">Hier wird verkn&uuml;pft: <b>Slot</b> + <b>Wetter-Template/kein Template</b> + <b>Pumpe</b>.</div>
+      <div id="assignRows">{assignment_rows_html}</div>
+      <div id="noAssignmentsMsg" style="display:{noAssignmentsMsg};color:#999;font-style:italic;margin-bottom:8px">
+        Noch keine Pumpenzuweisung vorhanden.
+      </div>
+      <div class="section-toolbar">
+        <button type="button" class="btn" onclick="addAssignment()" style="background:#17a2b8">+ Zuweisung hinzuf&#252;gen</button>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <h2 style="color:#1a6b3c">4) Pumpen &#8594; &#220;bersicht</h2>
+      <div id="pumpSlotOverview">{pump_assignment_overview_html}</div>
+    </div>
 
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" type="submit">&#128190; Speichern</button>
@@ -476,7 +510,9 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
 var pumpCount={pumpCount};
 var pumpNames={pump_names_json};
 var slotNames={slot_names_json};
+var weatherTemplateNames={weather_template_names_json};
 var _nextSlotIdx={slotCount};
+var _nextWeatherTemplateIdx={weatherTemplateCount};
 var _nextAssignIdx={assignCount};
 var dayL=['Mo','Di','Mi','Do','Fr','Sa','So'];
 function pumpOpts(selIdx){
@@ -494,16 +530,20 @@ function slotOpts(selIdx){
   }
   return has?s:'<option value="0" disabled>&#x26A0; Kein Slot vorhanden</option>';
 }
+function weatherTemplateOpts(selIdx){
+  var s='<option value="-1"'+(selIdx<0?' selected':'')+'>Kein Template</option>';
+  for(var i=0;i<weatherTemplateNames.length;i++){
+    if(weatherTemplateNames[i]==null) continue;
+    s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+weatherTemplateNames[i]+'</option>';
+  }
+  return s;
+}
 function onTriggerChange(si,v){ var row=document.getElementById('offsetRow'+si); if(row) row.style.display=(v==='4')?'flex':'none'; }
 function onRepeatModeChange(si,v){
   var days=document.getElementById('daysRow'+si), iv=document.getElementById('intervalRow'+si);
   var isIv=(v==='1');
   if(days) days.style.display=isIv?'none':'block';
   if(iv) iv.style.display=isIv?'flex':'none';
-}
-function onAssignmentWeatherModeChange(ai,v){
-  var el=document.getElementById('asweather'+ai);
-  if(el) el.style.display=(v==='policy')?'block':'none';
 }
 function toggleSlotEditor(si,forceOpen){ var body=document.getElementById('slotBody'+si); if(!body) return; if(forceOpen===true){body.style.display='block';return;} body.style.display=(body.style.display==='none'||body.style.display==='')?'block':'none'; }
 function editSlot(si){ toggleSlotEditor(si,true); var inp=document.querySelector('input[name=\"s'+si+'_name\"]'); if(inp){inp.focus();inp.scrollIntoView({behavior:'smooth',block:'center'});} }
@@ -512,12 +552,25 @@ function refreshAssignmentSlotOptions(){
     var cur=parseInt(sel.value||'0'); sel.innerHTML=slotOpts(cur);
   });
 }
+function refreshAssignmentWeatherTemplateOptions(){
+  document.querySelectorAll('#assignRows select[name$=\"_weatherTemplate\"]').forEach(function(sel){
+    var cur=parseInt(sel.value||'-1'); sel.innerHTML=weatherTemplateOpts(cur);
+  });
+}
 function updateSlotHeading(slotIdx,input){
   var b=input.closest('.pump-entry').querySelector('b');
   var n=(input.value||('Slot '+(slotIdx+1)));
   if(b) b.textContent='\u23F1 '+(slotIdx+1)+' \u2013 '+n;
   slotNames[slotIdx]=(slotIdx+1)+' - '+n;
   refreshAssignmentSlotOptions();
+}
+function updateWeatherTemplateHeading(idx,input){
+  var wrap=input.closest('.pump-entry');
+  var b=wrap?wrap.querySelector('b'):null;
+  var n=(input.value||('Wetter '+(idx+1)));
+  if(b) b.textContent='🌦️ '+n;
+  weatherTemplateNames[idx]=n;
+  refreshAssignmentWeatherTemplateOptions();
 }
 function addSlot(){
   var si=_nextSlotIdx++;
@@ -535,26 +588,47 @@ function deleteSlot(si){
   if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0)document.getElementById('noSlotsMsg').style.display='block';
   refreshAssignmentSlotOptions();
 }
+function mkWeatherTemplate(wi,d){
+  d=d||{}; var nm=d.name||('Wetter '+(wi+1));
+  var skipRainMm=d.skipIfRainMm!=null?d.skipIfRainMm:0;
+  var skipRainPct=d.skipIfRainPct!=null?d.skipIfRainPct:0;
+  var aboveTemp=d.runOnlyAboveTemp!=null?d.runOnlyAboveTemp:-99;
+  var reduceRainMm=d.reduceIfRainMm!=null?d.reduceIfRainMm:0;
+  var reducePct=d.reducePct||50;
+  return '<div class=\"pump-entry\" id=\"wt'+wi+'\" style=\"border:1px solid #cfe0f6;padding:12px;margin-bottom:12px;border-radius:6px;background:#f7fbff\">'
+    +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\"><b style=\"font-size:1.05em\">🌦️ '+nm+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editWeatherTemplate('+wi+')\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteWeatherTemplate('+wi+')\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"wt'+wi+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateWeatherTemplateHeading('+wi+',this)\" required></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"wt'+wi+'_skipRainMm\" value=\"'+skipRainMm+'\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"wt'+wi+'_skipRainPct\" value=\"'+skipRainPct+'\" min=\"0\" max=\"100\"></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"wt'+wi+'_aboveTemp\" value=\"'+aboveTemp+'\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"wt'+wi+'_reduceRainMm\" value=\"'+reduceRainMm+'\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"wt'+wi+'_reducePct\" value=\"'+reducePct+'\" min=\"1\" max=\"99\"></div></div></div>';
+}
+function addWeatherTemplate(){
+  var wi=_nextWeatherTemplateIdx++;
+  weatherTemplateNames[wi]='Wetter '+(wi+1);
+  document.getElementById('weatherTemplates').insertAdjacentHTML('beforeend',mkWeatherTemplate(wi,{}));
+  document.getElementById('weatherTemplateCount').value=_nextWeatherTemplateIdx;
+  document.getElementById('noWeatherTemplatesMsg').style.display='none';
+  refreshAssignmentWeatherTemplateOptions();
+  editWeatherTemplate(wi);
+}
+function deleteWeatherTemplate(wi){
+  var el=document.getElementById('wt'+wi); if(el)el.remove();
+  weatherTemplateNames[wi]=null;
+  document.getElementById('weatherTemplateCount').value=_nextWeatherTemplateIdx;
+  if(document.getElementById('weatherTemplates').querySelectorAll('[id^=\"wt\"]').length===0)document.getElementById('noWeatherTemplatesMsg').style.display='block';
+  refreshAssignmentWeatherTemplateOptions();
+}
+function editWeatherTemplate(wi){ var inp=document.querySelector('input[name=\"wt'+wi+'_name\"]'); if(inp){inp.focus();inp.scrollIntoView({behavior:'smooth',block:'center'});} }
 function addAssignment(){
   if(pumpCount===0){alert('Bitte zuerst Pumpen konfigurieren.');return;}
+  if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0){alert('Bitte zuerst einen Slot anlegen.');return;}
   var ai=_nextAssignIdx++;
-  var html='<div class=\"form-row\" style=\"margin-top:6px;align-items:center\" id=\"asrow'+ai+'\">'
+  var html='<div class=\"pump-entry\" style=\"border:1px solid #eadfb7;padding:12px;margin-bottom:12px;border-radius:6px;background:#fffdf5\" id=\"asrow'+ai+'\">'
+    +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\"><b style=\"font-size:1.05em\">🔗 Zuweisung '+(ai+1)+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editAssignment('+ai+')\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteAssignment('+ai+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
+    +'<div class=\"form-row\">'
     +'<div class=\"form-col\"><label>Slot</label><select name=\"as'+ai+'_slot\">'+slotOpts(0)+'</select></div>'
     +'<div class=\"form-col\"><label>Pumpe</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
+    +'<div class=\"form-col\"><label>Wetter-Template</label><select name=\"as'+ai+'_weatherTemplate\">'+weatherTemplateOpts(-1)+'</select></div>'
     +'<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as'+ai+'_duration\" value=\"60\" min=\"1\" max=\"7200\"></div>'
-    +'<div class=\"form-col\"><label>Wetter-Policy</label><select name=\"as'+ai+'_weatherMode\" onchange=\"onAssignmentWeatherModeChange('+ai+',this.value)\"><option value=\"none\">Ignorieren</option><option value=\"policy\">Eigene Policy</option></select></div>'
-    +'<div id=\"asweather'+ai+'\" style=\"display:none;width:100%\">'
-    +'<div class=\"form-row\">'
-    +'<div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_skipRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div>'
-    +'<div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"as'+ai+'_skipRainPct\" value=\"0\" min=\"0\" max=\"100\"></div>'
-    +'</div><div class=\"form-row\">'
-    +'<div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"as'+ai+'_aboveTemp\" value=\"-99\" min=\"-99\" max=\"60\" step=\"0.5\"></div>'
-    +'<div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_reduceRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div>'
-    +'<div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"as'+ai+'_reducePct\" value=\"50\" min=\"1\" max=\"99\"></div>'
-    +'</div></div>'
-    +'<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">'
-    +'<button type=\"button\" onclick=\"editAssignment('+ai+')\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>'
-    +'<button type=\"button\" onclick=\"deleteAssignment('+ai+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>'
     +'</div></div>';
   document.getElementById('assignRows').insertAdjacentHTML('beforeend',html);
   document.getElementById('assignCount').value=_nextAssignIdx;
@@ -583,10 +657,10 @@ function mkSlot(si,d){
     +'<div id=\"offsetRow'+si+'\" style=\"display:'+offDisp+'\" class=\"form-row\"><div class=\"form-col\"><label>Offset-Basis</label><select name=\"s'+si+'_offsetBase\">'+baseOpts+'</select></div><div class=\"form-col\"><label>Offset (Min., negativ = davor, positiv = danach)</label><input type=\"number\" name=\"s'+si+'_offsetMin\" value=\"'+offMin+'\" min=\"-720\" max=\"720\"></div></div>'
     +'<div class=\"form-row\"><div class=\"form-col\"><label>Wiederholung</label><select name=\"s'+si+'_repeatMode\" onchange=\"onRepeatModeChange('+si+',this.value)\">'+repOpts+'</select></div></div>'
     +'<div id=\"daysRow'+si+'\" style=\"display:'+(repeatMode===1?'none':'block')+';margin-top:6px\">'+daysHtml+'</div>'
-    +'<div id=\"intervalRow'+si+'\" style=\"display:'+(repeatMode===1?'flex':'none')+'\" class=\"form-row\"><div class=\"form-col\"><label>Alle N Tage</label><input type=\"number\" name=\"s'+si+'_intervalDays\" value=\"'+intervalDays+'\" min=\"1\" max=\"90\"></div><div class=\"form-col\"><label>Startdatum (Anker)</label><input type=\"date\" name=\"s'+si+'_intervalAnchor\" value=\"'+intervalAnchor+'\"></div></div>'
-    +'</div></div>';
+     +'<div id=\"intervalRow'+si+'\" style=\"display:'+(repeatMode===1?'flex':'none')+'\" class=\"form-row\"><div class=\"form-col\"><label>Alle N Tage</label><input type=\"number\" name=\"s'+si+'_intervalDays\" value=\"'+intervalDays+'\" min=\"1\" max=\"90\"></div><div class=\"form-col\"><label>Startdatum (Anker)</label><input type=\"date\" name=\"s'+si+'_intervalAnchor\" value=\"'+intervalAnchor+'\"></div></div>'
+     +'</div></div>';
 }
-function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('assignCount').value=_nextAssignIdx; }
+function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('weatherTemplateCount').value=_nextWeatherTemplateIdx; document.getElementById('assignCount').value=_nextAssignIdx; }
 </script>
 )rawhtml";
 

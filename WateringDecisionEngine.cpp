@@ -6,6 +6,13 @@ static void setText(char* dst, size_t dstSize, const char* text) {
     strlcpy(dst, text ? text : "", dstSize);
 }
 
+static bool weatherPolicyIsActive(const WeatherPolicy& policy) {
+    return policy.skipIfRainMm > 0.0f ||
+           policy.skipIfRainPct > 0.0f ||
+           policy.runOnlyAboveTemp > -99.0f ||
+           policy.reduceIfRainMm > 0.0f;
+}
+
 static int daysFromCivil(int y, unsigned m, unsigned d) {
     y -= m <= 2;
     const int era = (y >= 0 ? y : y - 399) / 400;
@@ -212,8 +219,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
         p.durationSec     = asgn.durationSec;
         p.action          = WATER_ACTION_EXECUTE;
         setText(p.reason, sizeof(p.reason), "Wird ausgeführt.");
-        setText(p.policySource, sizeof(p.policySource),
-                asgn.useOwnWeatherPolicy ? "assignment" : "slot-legacy");
+        setText(p.policySource, sizeof(p.policySource), "none");
 
         if (!input.hardwareConfig->pumps[p.pumpIndex].enabled) {
             p.action = WATER_ACTION_SKIP;
@@ -224,17 +230,25 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
         }
 
         WeatherPolicy policy;
-        if (asgn.useOwnWeatherPolicy) {
+        if (asgn.weatherTemplateIndex >= 0 &&
+            asgn.weatherTemplateIndex < input.slotConfig->weatherTemplateCount) {
+            policy = input.slotConfig->weatherTemplates[asgn.weatherTemplateIndex].weather;
+            setText(p.policySource, sizeof(p.policySource), "template");
+        } else if (asgn.useOwnWeatherPolicy) {
             policy = asgn.weather;
+            setText(p.policySource, sizeof(p.policySource), "assignment-legacy");
         } else {
             policy.skipIfRainMm = slot.skipIfRainMm;
             policy.skipIfRainPct = slot.skipIfRainPct;
             policy.runOnlyAboveTemp = slot.runOnlyAboveTemp;
             policy.reduceIfRainMm = slot.reduceIfRainMm;
             policy.reducePct = slot.reducePct;
+            if (weatherPolicyIsActive(policy)) {
+                setText(p.policySource, sizeof(p.policySource), "slot-legacy");
+            }
         }
 
-        if (input.weatherAvailable && input.weatherData) {
+        if (input.weatherAvailable && input.weatherData && weatherPolicyIsActive(policy)) {
             const WeatherData& w = *input.weatherData;
             if (policy.skipIfRainMm > 0.0f && w.dailyPrecipMm >= policy.skipIfRainMm) {
                 p.action = WATER_ACTION_SKIP;

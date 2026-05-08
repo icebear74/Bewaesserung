@@ -69,6 +69,7 @@ struct HardwareConfig {
 #define OFFSET_BASE_MIDDAY  2
 
 #define MAX_SLOTS           16
+#define MAX_WEATHER_TEMPLATES 16
 #define MAX_SLOT_ASSIGNMENTS 32
 
 // Repeat mode
@@ -106,8 +107,14 @@ struct WeatherPolicy {
     uint8_t reducePct        = 50;     // 1..99
 };
 
+struct WeatherTemplate {
+    char          name[32] = "";
+    WeatherPolicy weather;
+};
+
 // Assignment: one pump runs for a given duration when a slot fires
 struct SlotPumpAssignment {
+    int8_t  weatherTemplateIndex = -1; // -1 = no weather template
     uint8_t slotIndex   = 0;    // index into SlotConfig.slots[]
     uint8_t pumpIndex   = 0;    // index into HardwareConfig.pumps[]
     int     durationSec = 60;
@@ -118,6 +125,8 @@ struct SlotPumpAssignment {
 struct SlotConfig {
     int slotCount   = 0;
     WateringSlot slots[MAX_SLOTS];
+    int weatherTemplateCount = 0;
+    WeatherTemplate weatherTemplates[MAX_WEATHER_TEMPLATES];
     int assignCount = 0;
     SlotPumpAssignment assignments[MAX_SLOT_ASSIGNMENTS];
 };
