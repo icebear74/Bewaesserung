@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <math.h>
 
 WeatherManager::WeatherManager() {}
 
@@ -30,6 +31,14 @@ bool WeatherManager::fetchNow() {
     if (!_cfg || WiFi.status() != WL_CONNECTED) return false;
 
     DeviceConfig& dc = _cfg->getDeviceConfig();
+    if (!isfinite(dc.latitude) || !isfinite(dc.longitude) ||
+        dc.latitude < -90.0f || dc.latitude > 90.0f ||
+        dc.longitude < -180.0f || dc.longitude > 180.0f) {
+        Serial.printf("[Weather] Invalid coordinates lat=%.4f lon=%.4f; skipping fetch.\n",
+                      dc.latitude, dc.longitude);
+        _lastFetchMs = millis();  // back off; don't retry immediately
+        return false;
+    }
 
     // Build Open-Meteo URL (HTTPS; no API key required)
     char url[512];
