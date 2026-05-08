@@ -61,6 +61,8 @@ static int daysFromCivil(int y, unsigned m, unsigned d) {
     return era * 146097 + (int)doe - 719468;
 }
 
+static const int MAX_NEXT_SEARCH_DAYS = 90;
+
 // ─── Common warning fragments ─────────────────────────────────────────────────
 
 static String ds3231WarningHtml() {
@@ -1366,10 +1368,18 @@ static const char* actionToText(WateringDecisionAction action) {
 static String formatDateTimeLocal(time_t ts) {
     if (ts <= 0) return "–";
     struct tm t;
+    struct tm nowTm;
+    time_t now = time(nullptr);
     localtime_r(&ts, &t);
-    char buf[20];
-    snprintf(buf, sizeof(buf), "%02d.%02d %02d:%02d",
-             t.tm_mday, t.tm_mon + 1, t.tm_hour, t.tm_min);
+    localtime_r(&now, &nowTm);
+    char buf[24];
+    if (t.tm_year != nowTm.tm_year) {
+        snprintf(buf, sizeof(buf), "%02d.%02d.%04d %02d:%02d",
+                 t.tm_mday, t.tm_mon + 1, t.tm_year + 1900, t.tm_hour, t.tm_min);
+    } else {
+        snprintf(buf, sizeof(buf), "%02d.%02d %02d:%02d",
+                 t.tm_mday, t.tm_mon + 1, t.tm_hour, t.tm_min);
+    }
     return String(buf);
 }
 
@@ -1399,7 +1409,7 @@ static bool findNextSlotDecision(int slotIndex,
     localtime_r(&nowLocal, &nowTm);
     nowTm.tm_sec = 0;
 
-    for (int dayOff = 0; dayOff <= 90; dayOff++) {
+    for (int dayOff = 0; dayOff <= MAX_NEXT_SEARCH_DAYS; dayOff++) {
         struct tm probeTm = nowTm;
         probeTm.tm_mday += dayOff;
         probeTm.tm_hour = 12;

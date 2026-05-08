@@ -25,6 +25,7 @@ static bool dayMatches(const WateringSlot& slot, time_t localTs) {
     struct tm t;
     localtime_r(&localTs, &t);
     if (slot.repeatMode == REPEAT_INTERVAL_DAYS) {
+        // Defensive clamp: persisted/manual JSON edits can bypass UI validation.
         int every = slot.intervalDays < 1 ? 1 : slot.intervalDays;
         int today = localEpochDay(localTs);
         int anchor = slot.intervalAnchorDay;
