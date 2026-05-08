@@ -592,27 +592,30 @@ function deleteSlot(si){
   if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0)document.getElementById('noSlotsMsg').style.display='block';
   refreshAssignmentSlotOptions();
 }
-// Reihenfolge und Bedeutung müssen zu den C++-Enums in ConfigManager.h passen:
-// WeatherRuleActionType, WeatherRuleMetric, WeatherRuleComparison.
+// Muss in derselben Reihenfolge wie WeatherRuleActionType in ConfigManager.h bleiben.
 var weatherRuleActionLabels=['Aussetzen','Laufzeit verkürzen','Laufzeit verlängern'];
+// Muss in derselben Reihenfolge wie WeatherRuleMetric in ConfigManager.h bleiben.
 var weatherRuleMetricLabels=['Aktuelle Temperatur','Max. Temperatur in Zeitfenster','Aktueller Niederschlag (mm)','Aktuelle Regenwahrscheinlichkeit (%)','Regen heute (mm)','Regenwahrscheinlichkeit heute (%)','Regenmenge im Zeitfenster (mm)','Max. Regenwahrscheinlichkeit im Zeitfenster (%)'];
+// Muss in derselben Reihenfolge wie WeatherRuleComparison in ConfigManager.h bleiben.
 var weatherRuleOperatorLabels=['>','>=','<','<='];
-function metricUsesWindow(metric){ metric=parseInt(metric||0,10); return metric===1||metric===6||metric===7; }
+var WEATHER_RULE_SKIP=0, WEATHER_RULE_REDUCE_RUNTIME=1, WEATHER_RULE_INCREASE_RUNTIME=2;
+var WEATHER_METRIC_CURRENT_TEMP=0, WEATHER_METRIC_FORECAST_TEMP_MAX=1, WEATHER_METRIC_CURRENT_RAIN_MM=2, WEATHER_METRIC_CURRENT_RAIN_PROB=3, WEATHER_METRIC_DAILY_RAIN_MM=4, WEATHER_METRIC_DAILY_RAIN_PROB=5, WEATHER_METRIC_FORECAST_RAIN_SUM=6, WEATHER_METRIC_FORECAST_RAIN_PROB_MAX=7;
+function metricUsesWindow(metric){ metric=parseInt(metric||0,10); return metric===WEATHER_METRIC_FORECAST_TEMP_MAX||metric===WEATHER_METRIC_FORECAST_RAIN_SUM||metric===WEATHER_METRIC_FORECAST_RAIN_PROB_MAX; }
 function ruleSummary(d){
   d=d||{};
-  var metric=parseInt(d.metric!=null?d.metric:4,10), cmp=parseInt(d.comparison!=null?d.comparison:1,10), action=parseInt(d.actionType!=null?d.actionType:0,10);
-  var unit=(metric===0||metric===1)?'°C':((metric===2||metric===4||metric===6)?' mm':'%');
+  var metric=parseInt(d.metric!=null?d.metric:WEATHER_METRIC_DAILY_RAIN_MM,10), cmp=parseInt(d.comparison!=null?d.comparison:1,10), action=parseInt(d.actionType!=null?d.actionType:WEATHER_RULE_SKIP,10);
+  var unit=(metric===WEATHER_METRIC_CURRENT_TEMP||metric===WEATHER_METRIC_FORECAST_TEMP_MAX)?'°C':((metric===WEATHER_METRIC_CURRENT_RAIN_MM||metric===WEATHER_METRIC_DAILY_RAIN_MM||metric===WEATHER_METRIC_FORECAST_RAIN_SUM)?' mm':'%');
   var metricText=weatherRuleMetricLabels[metric]||'Wetterwert';
   if(metricUsesWindow(metric)) metricText+=' in den nächsten '+(d.windowHours||24)+'h';
-  if(action===0) return metricText+' '+(weatherRuleOperatorLabels[cmp]||'>=')+' '+(d.threshold!=null?d.threshold:0)+unit+' → Aussetzen';
-  return metricText+' '+(weatherRuleOperatorLabels[cmp]||'>=')+' '+(d.threshold!=null?d.threshold:0)+unit+' → '+(action===1?'-':'+')+(d.effectPercent||25)+'% Laufzeit';
+  if(action===WEATHER_RULE_SKIP) return metricText+' '+(weatherRuleOperatorLabels[cmp]||'>=')+' '+(d.threshold!=null?d.threshold:0)+unit+' → Aussetzen';
+  return metricText+' '+(weatherRuleOperatorLabels[cmp]||'>=')+' '+(d.threshold!=null?d.threshold:0)+unit+' → '+(action===WEATHER_RULE_REDUCE_RUNTIME?'-':'+')+(d.effectPercent||25)+'% Laufzeit';
 }
 function onRuleChanged(wi,ri){
   var row=document.getElementById('wtr'+wi+'_'+ri); if(!row) return;
   var sm=document.getElementById('wt'+wi+'r'+ri+'Summary'); if(!sm) return;
   sm.textContent=ruleSummary({
-    actionType: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_action\"]')||{}).value||0,10),
-    metric: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_metric\"]')||{}).value||4,10),
+    actionType: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_action\"]')||{}).value||WEATHER_RULE_SKIP,10),
+    metric: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_metric\"]')||{}).value||WEATHER_METRIC_DAILY_RAIN_MM,10),
     comparison: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_operator\"]')||{}).value||1,10),
     threshold: (row.querySelector('input[name=\"wt'+wi+'_r'+ri+'_threshold\"]')||{}).value||0,
     windowHours: (row.querySelector('input[name=\"wt'+wi+'_r'+ri+'_windowHours\"]')||{}).value||24,
@@ -621,7 +624,7 @@ function onRuleChanged(wi,ri){
 }
 function onRuleActionChange(wi,ri,v){
   var eff=document.getElementById('wt'+wi+'r'+ri+'EffectRow');
-  if(eff) eff.style.display=(String(v)==='0')?'none':'flex';
+  if(eff) eff.style.display=(String(v)===String(WEATHER_RULE_SKIP))?'none':'flex';
   onRuleChanged(wi,ri);
 }
 function onRuleMetricChange(wi,ri,v){
@@ -631,7 +634,7 @@ function onRuleMetricChange(wi,ri,v){
 }
 function mkWeatherRule(wi,ri,d){
   d=d||{};
-  var action=d.actionType!=null?d.actionType:0, metric=d.metric!=null?d.metric:4, cmp=d.comparison!=null?d.comparison:1;
+  var action=d.actionType!=null?d.actionType:WEATHER_RULE_SKIP, metric=d.metric!=null?d.metric:WEATHER_METRIC_DAILY_RAIN_MM, cmp=d.comparison!=null?d.comparison:1;
   var threshold=d.threshold!=null?d.threshold:0, effect=d.effectPercent||25, win=d.windowHours||24, enabled=d.enabled!==false?'checked':'';
   var actOpts='', metOpts='', cmpOpts='';
   for(var a=0;a<weatherRuleActionLabels.length;a++) actOpts+='<option value=\"'+a+'\"'+(parseInt(action,10)===a?' selected':'')+'>'+weatherRuleActionLabels[a]+'</option>';
@@ -643,7 +646,7 @@ function mkWeatherRule(wi,ri,d){
     +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Aktive Regeln werden ausgewertet, deaktivierte Regeln bleiben gespeichert.\"><input type=\"checkbox\" name=\"wt'+wi+'_r'+ri+'_enabled\" '+enabled+' onchange=\"onRuleChanged('+wi+','+ri+')\"> Aktiv</label></div><div class=\"form-col\"><label title=\"Aussetzen stoppt die Pumpe komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt'+wi+'_r'+ri+'_action\" onchange=\"onRuleActionChange('+wi+','+ri+',this.value)\">'+actOpts+'</select></div></div>'
     +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Der Wetterwert wird mit dem Schwellwert verglichen. Für Zeitfenster-Regeln werden die nächsten Stunden betrachtet.\">Wetterwert</label><select name=\"wt'+wi+'_r'+ri+'_metric\" onchange=\"onRuleMetricChange('+wi+','+ri+',this.value)\">'+metOpts+'</select></div><div class=\"form-col\"><label title=\"Vergleicht Wetterwert und Schwellwert. Beispiel: > 30.\">Vergleich</label><select name=\"wt'+wi+'_r'+ri+'_operator\" onchange=\"onRuleChanged('+wi+','+ri+')\">'+cmpOpts+'</select></div><div class=\"form-col\"><label title=\"Ab diesem Wert greift die Regel.\">Schwellwert</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_threshold\" value=\"'+threshold+'\" step=\"0.1\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div>'
     +'<div id=\"wt'+wi+'r'+ri+'WindowRow\" class=\"form-row\" style=\"display:'+(metricUsesWindow(metric)?'flex':'none')+'\"><div class=\"form-col\"><label title=\"Nur für Zeitfenster-Regeln: wie viele nächste Stunden ausgewertet werden.\">Zeitfenster (h)</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_windowHours\" value=\"'+win+'\" min=\"1\" max=\"48\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div>'
-    +'<div id=\"wt'+wi+'r'+ri+'EffectRow\" class=\"form-row\" style=\"display:'+(parseInt(action,10)===0?'none':'flex')+'\"><div class=\"form-col\"><label title=\"Positive Prozentwerte beziehen sich immer auf die Basislaufzeit der Zuweisung.\">Effekt (%)</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_effectPct\" value=\"'+effect+'\" min=\"1\" max=\"200\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div></div>';
+    +'<div id=\"wt'+wi+'r'+ri+'EffectRow\" class=\"form-row\" style=\"display:'+(parseInt(action,10)===WEATHER_RULE_SKIP?'none':'flex')+'\"><div class=\"form-col\"><label title=\"Positive Prozentwerte beziehen sich immer auf die Basislaufzeit der Zuweisung.\">Effekt (%)</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_effectPct\" value=\"'+effect+'\" min=\"1\" max=\"200\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div></div>';
 }
 function addWeatherRule(wi,d){
   var wrap=document.getElementById('wt'+wi); if(!wrap) return;

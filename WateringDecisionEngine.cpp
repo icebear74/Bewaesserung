@@ -2,6 +2,9 @@
 #include <math.h>
 #include <time.h>
 
+static const time_t INVALID_TIME = 0;
+static const int MIN_ADJUSTMENT_PERCENT = -99;
+
 static void setText(char* dst, size_t dstSize, const char* text) {
     if (!dst || dstSize == 0) return;
     strlcpy(dst, text ? text : "", dstSize);
@@ -241,7 +244,7 @@ static bool forecastWindowHasSamples(const WeatherData& w, time_t nowLocal, uint
                                      int* firstIndex, int* lastIndex) {
     if (firstIndex) *firstIndex = -1;
     if (lastIndex) *lastIndex = -1;
-    if (w.hourlyCount == 0 || nowLocal <= 0) return false;
+    if (w.hourlyCount == 0 || nowLocal <= INVALID_TIME) return false;
 
     time_t endTs = nowLocal + (time_t)max((int)windowHours, 1) * 3600;
     bool found = false;
@@ -568,7 +571,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
             }
 
             if (matchedAdjustCount > 0) {
-                if (adjustmentDelta < -99) adjustmentDelta = -99;
+                if (adjustmentDelta < MIN_ADJUSTMENT_PERCENT) adjustmentDelta = MIN_ADJUSTMENT_PERCENT;
                 p.adjustmentPercent = adjustmentDelta;
                 long adjusted = (long)p.baseDurationSec * (long)(100 + adjustmentDelta) / 100L;
                 if (adjusted < 1) adjusted = 1;

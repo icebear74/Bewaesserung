@@ -68,6 +68,7 @@ static int daysFromCivil(int y, unsigned m, unsigned d) {
 }
 
 static const int MAX_NEXT_SEARCH_DAYS = 90;
+static const int MAX_SUBMITTED_RULE_INDICES = MAX_WEATHER_RULES_PER_TEMPLATE * 4;
 
 // ─── Common warning fragments ─────────────────────────────────────────────────
 
@@ -1619,7 +1620,7 @@ static void handleSaveWatering() {
 
         snprintf(key, sizeof(key), "wt%d_ruleCount", wi);
         int ruleCount = constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0,
-                                  0, MAX_WEATHER_RULES_PER_TEMPLATE * 4);
+                                  0, MAX_SUBMITTED_RULE_INDICES);
         for (int ri = 0; ri < ruleCount && wt.ruleCount < MAX_WEATHER_RULES_PER_TEMPLATE; ri++) {
             char rkey[40];
             snprintf(rkey, sizeof(rkey), "wt%d_r%d_action", wi, ri);

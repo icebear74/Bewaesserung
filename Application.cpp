@@ -116,7 +116,7 @@ void Application::update() {
 
     _wifiManager->update();
 
-    if (!_otaStarted && (_wifiManager->isConnected() || _wifiManager->isApModeActive())) {
+    if (_wifiManager->isConnected() || _wifiManager->isApModeActive()) {
         startOta();
     }
 
