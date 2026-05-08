@@ -69,6 +69,20 @@ src/
 - `/config_location` – Standort mit Kartenansicht (Leaflet)
 - `/config_hardware` – Relais-Konfiguration (Neustart erforderlich bei Änderung)
 - `/config_watering` – Bewässerungsplan (Phase 2)
+- `/watering_test` – Simulation mit identischer Decision-Engine wie Livebetrieb
+
+### Bewässerungsmodell (aktuell)
+
+- **Slots** definieren nur Zeittrigger + Wiederholung (`Wochentage` oder `alle N Tage`).
+- **Pumpen-Zuweisungen** verbinden Pumpen mit Slots (Bacula-ähnlich).
+- **Wetter-Policy** liegt auf der Pumpen-Zuweisung (pro Slot/Pumpe unterschiedlich möglich).
+- Livebetrieb, Status, Simulation und API verwenden dieselbe `WateringDecisionEngine`.
+
+### JSON-APIs
+
+- `/api/weather` – Wetterdaten inkl. 24h-Kontext (wenn verfügbar)
+- `/api/watering_simulate` – Simulationslauf für einen Slot/Zeitpunkt
+- `/api/watering_status` – Gesamtstatus mit Slot-/Pumpen-Entscheidungen und nächsten Läufen
 
 ### Setup-AP-Modus
 

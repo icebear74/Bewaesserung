@@ -1,6 +1,63 @@
 #include "ConfigManager.h"
 #include <LittleFS.h>
 
+static bool weatherPolicyIsActive(const WeatherPolicy& policy) {
+    return policy.skipIfRainMm > 0.0f ||
+           policy.skipIfRainPct > 0.0f ||
+           policy.runOnlyAboveTemp > -99.0f ||
+           policy.reduceIfRainMm > 0.0f;
+}
+
+static WeatherPolicy makeSlotLegacyPolicy(const WateringSlot& slot) {
+    WeatherPolicy policy;
+    policy.skipIfRainMm = slot.skipIfRainMm;
+    policy.skipIfRainPct = slot.skipIfRainPct;
+    policy.runOnlyAboveTemp = slot.runOnlyAboveTemp;
+    policy.reduceIfRainMm = slot.reduceIfRainMm;
+    policy.reducePct = slot.reducePct;
+    return policy;
+}
+
+static bool weatherPolicyEquals(const WeatherPolicy& a, const WeatherPolicy& b) {
+    return a.skipIfRainMm == b.skipIfRainMm &&
+           a.skipIfRainPct == b.skipIfRainPct &&
+           a.runOnlyAboveTemp == b.runOnlyAboveTemp &&
+           a.reduceIfRainMm == b.reduceIfRainMm &&
+           a.reducePct == b.reducePct;
+}
+
+static void clearWeatherPolicy(WeatherPolicy& policy) {
+    policy = WeatherPolicy{};
+}
+
+static void clearSlotLegacyWeather(WateringSlot& slot) {
+    slot.skipIfRainMm = 0.0f;
+    slot.skipIfRainPct = 0.0f;
+    slot.runOnlyAboveTemp = -99.0f;
+    slot.reduceIfRainMm = 0.0f;
+    slot.reducePct = 50;
+}
+
+static int ensureWeatherTemplate(SlotConfig& sc, const char* preferredName, const WeatherPolicy& policy) {
+    for (int i = 0; i < sc.weatherTemplateCount; i++) {
+        if (weatherPolicyEquals(sc.weatherTemplates[i].weather, policy)) {
+            return i;
+        }
+    }
+    if (sc.weatherTemplateCount >= MAX_WEATHER_TEMPLATES) return -1;
+
+    int idx = sc.weatherTemplateCount++;
+    WeatherTemplate& wt = sc.weatherTemplates[idx];
+    wt = WeatherTemplate{};
+    wt.weather = policy;
+    if (preferredName && preferredName[0]) {
+        strlcpy(wt.name, preferredName, sizeof(wt.name));
+    } else {
+        snprintf(wt.name, sizeof(wt.name), "Wetter %d", idx + 1);
+    }
+    return idx;
+}
+
 ConfigManager::ConfigManager() {}
 
 void ConfigManager::begin() {
@@ -265,12 +322,32 @@ bool ConfigManager::loadSlotConfig() {
             s.fixedMinute     = (uint8_t)constrain((int)(so["fixedMinute"] | 0), 0, 59);
             s.offsetMinutes   = (int16_t)constrain((int)(so["offsetMinutes"] | 0), -720, 720);
             s.offsetBase      = (uint8_t)constrain((int)(so["offsetBase"] | 0), 0, 2);
+            s.repeatMode      = (uint8_t)constrain((int)(so["repeatMode"] | REPEAT_WEEKDAYS), REPEAT_WEEKDAYS, REPEAT_INTERVAL_DAYS);
             s.days            = (uint8_t)(so["days"] | 0x7F);
+            s.intervalDays    = (uint8_t)constrain((int)(so["intervalDays"] | 1), 1, 90);
+            s.intervalAnchorDay = (uint16_t)constrain((int)(so["intervalAnchorDay"] | 0), 0, 65535);
             s.skipIfRainMm    = so["skipIfRainMm"]   | 0.0f;
             s.skipIfRainPct   = so["skipIfRainPct"]  | 0.0f;
             s.runOnlyAboveTemp= so["runOnlyAboveTemp"]| -99.0f;
             s.reduceIfRainMm  = so["reduceIfRainMm"] | 0.0f;
             s.reducePct       = (uint8_t)constrain((int)(so["reducePct"] | 50), 1, 99);
+        }
+
+        if (doc["weatherTemplates"].is<JsonArray>()) {
+            JsonArray wtArr = doc["weatherTemplates"].as<JsonArray>();
+            int tc = min((int)wtArr.size(), MAX_WEATHER_TEMPLATES);
+            _slotConfig.weatherTemplateCount = tc;
+            for (int i = 0; i < tc; i++) {
+                WeatherTemplate& wt = _slotConfig.weatherTemplates[i];
+                wt = WeatherTemplate{};
+                JsonObject wto = wtArr[i].as<JsonObject>();
+                strlcpy(wt.name, wto["name"] | "", sizeof(wt.name));
+                wt.weather.skipIfRainMm = wto["skipIfRainMm"] | 0.0f;
+                wt.weather.skipIfRainPct = wto["skipIfRainPct"] | 0.0f;
+                wt.weather.runOnlyAboveTemp = wto["runOnlyAboveTemp"] | -99.0f;
+                wt.weather.reduceIfRainMm = wto["reduceIfRainMm"] | 0.0f;
+                wt.weather.reducePct = (uint8_t)constrain((int)(wto["reducePct"] | 50), 1, 99);
+            }
         }
 
         if (doc["assignments"].is<JsonArray>()) {
@@ -281,11 +358,56 @@ bool ConfigManager::loadSlotConfig() {
                 SlotPumpAssignment& a = _slotConfig.assignments[j];
                 a = SlotPumpAssignment{};
                 JsonObject ao = aArr[j].as<JsonObject>();
+                a.weatherTemplateIndex = (int8_t)constrain((int)(ao["weatherTemplateIndex"] | -1), -1, MAX_WEATHER_TEMPLATES - 1);
                 a.slotIndex   = (uint8_t)constrain((int)(ao["slotIndex"]   | 0), 0, MAX_SLOTS - 1);
                 a.pumpIndex   = (uint8_t)constrain((int)(ao["pumpIndex"]   | 0), 0, MAX_RELAY_COUNT - 1);
                 a.durationSec = constrain((int)(ao["durationSec"] | 60), 1, 7200);
+                a.useOwnWeatherPolicy = ao["useOwnWeatherPolicy"] | false;
+                a.weather.skipIfRainMm = ao["skipIfRainMm"] | 0.0f;
+                a.weather.skipIfRainPct = ao["skipIfRainPct"] | 0.0f;
+                a.weather.runOnlyAboveTemp = ao["runOnlyAboveTemp"] | -99.0f;
+                a.weather.reduceIfRainMm = ao["reduceIfRainMm"] | 0.0f;
+                a.weather.reducePct = (uint8_t)constrain((int)(ao["reducePct"] | 50), 1, 99);
             }
         }
+
+        for (int si = 0; si < _slotConfig.slotCount; si++) {
+            WateringSlot& slot = _slotConfig.slots[si];
+            WeatherPolicy legacyPolicy = makeSlotLegacyPolicy(slot);
+            if (!weatherPolicyIsActive(legacyPolicy)) continue;
+
+            int templateIndex = ensureWeatherTemplate(_slotConfig, slot.name, legacyPolicy);
+            if (templateIndex >= 0) {
+                for (int ai = 0; ai < _slotConfig.assignCount; ai++) {
+                    SlotPumpAssignment& a = _slotConfig.assignments[ai];
+                    if (a.slotIndex != (uint8_t)si) continue;
+                    if (a.weatherTemplateIndex < 0 && !a.useOwnWeatherPolicy) {
+                        a.weatherTemplateIndex = (int8_t)templateIndex;
+                    }
+                }
+            }
+            clearSlotLegacyWeather(slot);
+        }
+
+        for (int ai = 0; ai < _slotConfig.assignCount; ai++) {
+            SlotPumpAssignment& a = _slotConfig.assignments[ai];
+            if (a.weatherTemplateIndex >= 0) continue;
+            if (!a.useOwnWeatherPolicy || !weatherPolicyIsActive(a.weather)) {
+                a.useOwnWeatherPolicy = false;
+                clearWeatherPolicy(a.weather);
+                continue;
+            }
+
+            char templateName[32];
+            snprintf(templateName, sizeof(templateName), "Wetter %d", _slotConfig.weatherTemplateCount + 1);
+            int templateIndex = ensureWeatherTemplate(_slotConfig, templateName, a.weather);
+            if (templateIndex >= 0) {
+                a.weatherTemplateIndex = (int8_t)templateIndex;
+                a.useOwnWeatherPolicy = false;
+                clearWeatherPolicy(a.weather);
+            }
+        }
+
         Serial.printf("[Config] Slot config loaded: %d slots, %d assignments.\n",
                       _slotConfig.slotCount, _slotConfig.assignCount);
         return true;
@@ -309,6 +431,9 @@ bool ConfigManager::loadSlotConfig() {
             s.fixedHour   = (uint8_t)constrain((int)(e["hour"]   | 6), 0, 23);
             s.fixedMinute = (uint8_t)constrain((int)(e["minute"] | 0), 0, 59);
             s.days        = (uint8_t)(e["days"] | 0x7F);
+            s.repeatMode  = REPEAT_WEEKDAYS;
+            s.intervalDays = 1;
+            s.intervalAnchorDay = 0;
 
             int aj = _slotConfig.assignCount++;
             SlotPumpAssignment& a = _slotConfig.assignments[aj];
@@ -344,20 +469,41 @@ bool ConfigManager::saveSlotConfig() {
         so["fixedMinute"]    = s.fixedMinute;
         so["offsetMinutes"]  = s.offsetMinutes;
         so["offsetBase"]     = s.offsetBase;
+        so["repeatMode"]     = s.repeatMode;
         so["days"]           = s.days;
+        so["intervalDays"]   = s.intervalDays;
+        so["intervalAnchorDay"] = s.intervalAnchorDay;
         so["skipIfRainMm"]   = s.skipIfRainMm;
         so["skipIfRainPct"]  = s.skipIfRainPct;
         so["runOnlyAboveTemp"] = s.runOnlyAboveTemp;
         so["reduceIfRainMm"] = s.reduceIfRainMm;
         so["reducePct"]      = s.reducePct;
     }
+    JsonArray wtArr = doc["weatherTemplates"].to<JsonArray>();
+    for (int i = 0; i < _slotConfig.weatherTemplateCount; i++) {
+        const WeatherTemplate& wt = _slotConfig.weatherTemplates[i];
+        JsonObject wto = wtArr.add<JsonObject>();
+        wto["name"] = wt.name;
+        wto["skipIfRainMm"] = wt.weather.skipIfRainMm;
+        wto["skipIfRainPct"] = wt.weather.skipIfRainPct;
+        wto["runOnlyAboveTemp"] = wt.weather.runOnlyAboveTemp;
+        wto["reduceIfRainMm"] = wt.weather.reduceIfRainMm;
+        wto["reducePct"] = wt.weather.reducePct;
+    }
     JsonArray aArr = doc["assignments"].to<JsonArray>();
     for (int j = 0; j < _slotConfig.assignCount; j++) {
         const SlotPumpAssignment& a = _slotConfig.assignments[j];
         JsonObject ao = aArr.add<JsonObject>();
+        ao["weatherTemplateIndex"] = a.weatherTemplateIndex;
         ao["slotIndex"]   = a.slotIndex;
         ao["pumpIndex"]   = a.pumpIndex;
         ao["durationSec"] = a.durationSec;
+        ao["useOwnWeatherPolicy"] = a.useOwnWeatherPolicy;
+        ao["skipIfRainMm"] = a.weather.skipIfRainMm;
+        ao["skipIfRainPct"] = a.weather.skipIfRainPct;
+        ao["runOnlyAboveTemp"] = a.weather.runOnlyAboveTemp;
+        ao["reduceIfRainMm"] = a.weather.reduceIfRainMm;
+        ao["reducePct"] = a.weather.reducePct;
     }
     serializeJson(doc, f);
     f.close();

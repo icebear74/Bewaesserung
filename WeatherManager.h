@@ -23,6 +23,9 @@ public:
     const WeatherData& getData()    const { return _data; }
     bool  isAvailable()             const { return _data.available; }
     bool  isStale()                 const;
+    const char* getLastRequestUrl() const { return _lastRequestUrl; }
+    const char* getLastError()      const { return _lastError; }
+    int         getLastHttpCode()   const { return _lastHttpCode; }
 
     // Astronomical helpers – return local epoch (0 if unavailable)
     time_t getSunrise() const { return _data.sunrise; }
@@ -37,4 +40,7 @@ private:
     WeatherData    _data;
     unsigned long  _lastFetchMs = 0;
     bool           _fetchDue    = true;  // fetch on first update() call
+    int            _lastHttpCode = 0;
+    char           _lastRequestUrl[512] = "";
+    char           _lastError[256] = "";
 };
