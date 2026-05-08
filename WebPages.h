@@ -440,8 +440,9 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
   <h1>&#128167; Bew&#228;sserungsplan</h1>
   {watering_status}
   <div class="alert-info">
-    &#128161; <b>1) Slots definieren:</b> Zeittrigger + Wetterregeln.<br>
+    &#128161; <b>1) Slots definieren:</b> reine Zeittrigger + Wiederholung.<br>
     <b>2) Pumpen zu Slots zuweisen:</b> separat als Liste (Bacula-ähnlich).<br>
+    <b>3) Wetter-Policy:</b> pro Pumpen-Zuweisung (nicht im Slot).<br>
     Beide Pfade (Live + Testlauf) nutzen dieselbe Entscheidungs-Engine.
   </div>
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
@@ -494,6 +495,16 @@ function slotOpts(selIdx){
   return has?s:'<option value="0" disabled>&#x26A0; Kein Slot vorhanden</option>';
 }
 function onTriggerChange(si,v){ var row=document.getElementById('offsetRow'+si); if(row) row.style.display=(v==='4')?'flex':'none'; }
+function onRepeatModeChange(si,v){
+  var days=document.getElementById('daysRow'+si), iv=document.getElementById('intervalRow'+si);
+  var isIv=(v==='1');
+  if(days) days.style.display=isIv?'none':'block';
+  if(iv) iv.style.display=isIv?'flex':'none';
+}
+function onAssignmentWeatherModeChange(ai,v){
+  var el=document.getElementById('asweather'+ai);
+  if(el) el.style.display=(v==='policy')?'block':'none';
+}
 function toggleSlotEditor(si,forceOpen){ var body=document.getElementById('slotBody'+si); if(!body) return; if(forceOpen===true){body.style.display='block';return;} body.style.display=(body.style.display==='none'||body.style.display==='')?'block':'none'; }
 function editSlot(si){ toggleSlotEditor(si,true); var inp=document.querySelector('input[name=\"s'+si+'_name\"]'); if(inp){inp.focus();inp.scrollIntoView({behavior:'smooth',block:'center'});} }
 function refreshAssignmentSlotOptions(){
@@ -531,6 +542,8 @@ function addAssignment(){
     +'<div class=\"form-col\"><label>Slot</label><select name=\"as'+ai+'_slot\">'+slotOpts(0)+'</select></div>'
     +'<div class=\"form-col\"><label>Pumpe</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
     +'<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as'+ai+'_duration\" value=\"60\" min=\"1\" max=\"7200\"></div>'
+    +'<div class=\"form-col\"><label>Wetter-Policy</label><select name=\"as'+ai+'_weatherMode\" onchange=\"onAssignmentWeatherModeChange('+ai+',this.value)\"><option value=\"none\">Ignorieren</option><option value=\"policy\">Eigene Policy</option></select></div>'
+    +'<div id=\"asweather'+ai+'\" style=\"display:none;width:100%\"><div class=\"form-row\"><div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_skipRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"as'+ai+'_skipRainPct\" value=\"0\" min=\"0\" max=\"100\"></div></div><div class=\"form-row\"><div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"as'+ai+'_aboveTemp\" value=\"-99\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"as'+ai+'_reduceRainMm\" value=\"0\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"as'+ai+'_reducePct\" value=\"50\" min=\"1\" max=\"99\"></div></div></div>'
     +'<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">'
     +'<button type=\"button\" onclick=\"editAssignment('+ai+')\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>'
     +'<button type=\"button\" onclick=\"deleteAssignment('+ai+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>'
@@ -549,8 +562,10 @@ function mkSlot(si,d){
   var hr=d.fixedHour!=null?d.fixedHour:6, mn=d.fixedMinute!=null?d.fixedMinute:0;
   var timVal=(hr<10?'0':'')+hr+':'+(mn<10?'0':'')+mn;
   var offMin=d.offsetMinutes||0, offBase=d.offsetBase||0, days=d.days!=null?d.days:0x7F;
+  var repeatMode=d.repeatMode!=null?d.repeatMode:0, intervalDays=d.intervalDays||1, intervalAnchor=d.intervalAnchor||'';
   var daysHtml=''; for(var dd=0;dd<7;dd++){var c=(days&(1<<dd))?'checked':''; daysHtml+='<label style=\"margin-right:7px\"><input type=\"checkbox\" name=\"s'+si+'_d'+dd+'\" '+c+'> '+dayL[dd]+'</label>';}
-  var trNames=['Feste Uhrzeit','Sonnenaufgang','Sonnenuntergang','Mittagszeit','Offset (relativ)'], trOpts=''; for(var t=0;t<5;t++) trOpts+='<option value=\"'+t+'\"'+(tr===t?' selected':'')+'>'+trNames[t]+'</option>';
+  var trNames=['Feste Uhrzeit','Sonnenaufgang','Sonnenuntergang','Mittagszeit','Offset (relativ zu Referenz)'], trOpts=''; for(var t=0;t<5;t++) trOpts+='<option value=\"'+t+'\"'+(tr===t?' selected':'')+'>'+trNames[t]+'</option>';
+  var repNames=['Wochentage','Intervall (alle N Tage)'], repOpts=''; for(var r=0;r<2;r++) repOpts+='<option value=\"'+r+'\"'+(repeatMode===r?' selected':'')+'>'+repNames[r]+'</option>';
   var baseNames=['Sonnenaufgang','Sonnenuntergang','Mittagszeit'], baseOpts=''; for(var b=0;b<3;b++) baseOpts+='<option value=\"'+b+'\"'+(offBase===b?' selected':'')+'>'+baseNames[b]+'</option>';
   var offDisp=(tr===4)?'flex':'none';
   return '<div class=\"pump-entry\" id=\"slot'+si+'\" style=\"border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9\">'
@@ -558,11 +573,10 @@ function mkSlot(si,d){
     +'<div id=\"slotBody'+si+'\" style=\"display:block\"><div class=\"form-row\"><div class=\"form-col\"><label><input type=\"checkbox\" name=\"s'+si+'_enabled\" '+en+'> Aktiv</label></div><div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"s'+si+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateSlotHeading('+si+',this)\" required></div></div>'
     +'<div class=\"form-row\"><div class=\"form-col\"><label>Ausl&ouml;ser</label><select name=\"s'+si+'_trigger\" onchange=\"onTriggerChange('+si+',this.value)\">'+trOpts+'</select></div><div class=\"form-col\"><label>Uhrzeit / Fallback</label><input type=\"time\" name=\"s'+si+'_time\" value=\"'+timVal+'\"></div></div>'
     +'<div id=\"offsetRow'+si+'\" style=\"display:'+offDisp+'\" class=\"form-row\"><div class=\"form-col\"><label>Offset-Basis</label><select name=\"s'+si+'_offsetBase\">'+baseOpts+'</select></div><div class=\"form-col\"><label>Offset (Min., negativ = davor, positiv = danach)</label><input type=\"number\" name=\"s'+si+'_offsetMin\" value=\"'+offMin+'\" min=\"-720\" max=\"720\"></div></div>'
-    +'<div style=\"margin-top:6px\">'+daysHtml+'</div>'
-    +'<details style=\"margin-top:8px\"><summary style=\"cursor:pointer;font-weight:bold;color:#1a6b3c\">&#127777;&#65039; Wetterbedingungen</summary>'
-    +'<div class=\"form-row\" style=\"margin-top:6px\"><div class=\"form-col\"><label>Aussetzen wenn Regen &ge; (mm, 0=aus)</label><input type=\"number\" name=\"s'+si+'_skipRainMm\" value=\"'+(d.skipIfRainMm||0)+'\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Aussetzen wenn Regenwahrsch. &ge; (%, 0=aus)</label><input type=\"number\" name=\"s'+si+'_skipRainPct\" value=\"'+(d.skipIfRainPct||0)+'\" min=\"0\" max=\"100\"></div></div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label>Nur wenn Temp. &ge; (°C, -99=immer)</label><input type=\"number\" name=\"s'+si+'_aboveTemp\" value=\"'+(d.runOnlyAboveTemp||(-99))+'\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\"><label>Dauer red. wenn Regen &ge; (mm, 0=aus)</label><input type=\"number\" name=\"s'+si+'_reduceRainMm\" value=\"'+(d.reduceIfRainMm||0)+'\" min=\"0\" max=\"100\" step=\"0.1\"></div></div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label>Dauer-Reduktion (%)</label><input type=\"number\" name=\"s'+si+'_reducePct\" value=\"'+(d.reducePct||50)+'\" min=\"1\" max=\"99\"></div></div></details></div></div>';
+    +'<div class=\"form-row\"><div class=\"form-col\"><label>Wiederholung</label><select name=\"s'+si+'_repeatMode\" onchange=\"onRepeatModeChange('+si+',this.value)\">'+repOpts+'</select></div></div>'
+    +'<div id=\"daysRow'+si+'\" style=\"display:'+(repeatMode===1?'none':'block')+';margin-top:6px\">'+daysHtml+'</div>'
+    +'<div id=\"intervalRow'+si+'\" style=\"display:'+(repeatMode===1?'flex':'none')+'\" class=\"form-row\"><div class=\"form-col\"><label>Alle N Tage</label><input type=\"number\" name=\"s'+si+'_intervalDays\" value=\"'+intervalDays+'\" min=\"1\" max=\"90\"></div><div class=\"form-col\"><label>Startdatum (Anker)</label><input type=\"date\" name=\"s'+si+'_intervalAnchor\" value=\"'+intervalAnchor+'\"></div></div>'
+    +'</div></div>';
 }
 function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('assignCount').value=_nextAssignIdx; }
 </script>
@@ -600,6 +614,7 @@ const char HTML_WATERING_TEST_PAGE[] PROGMEM = R"rawhtml(
     <div class="form-col"><label>Aktueller Niederschlag (mm)</label><input type="number" id="precipMm" value="0" step="0.1"></div>
     <div class="form-col"><label>Aktuelle Niederschlagswahrscheinlichkeit (%)</label><input type="number" id="precipProb" value="0" step="1" min="0" max="100"></div>
   </div>
+  <div id="simWeatherContext" style="margin:10px 0;padding:10px;border:1px solid #dde7dd;border-radius:6px;background:#f8fff8"></div>
   <button class="btn" type="button" onclick="runSim()">Simulation starten</button>
   <div id="simResult" style="margin-top:14px"></div>
 </div>
@@ -609,8 +624,25 @@ var slots={slot_options_json};
   var s=document.getElementById('slotIndex');
   slots.forEach(function(it){ var o=document.createElement('option'); o.value=it.idx; o.textContent=it.name; s.appendChild(o); });
   var now=new Date(); now.setSeconds(0,0); document.getElementById('simTime').value=now.toISOString().slice(0,16);
+  fetch('/api/weather').then(function(r){return r.json();}).then(renderWeatherContext).catch(function(){renderWeatherContext({available:false});});
 })();
 function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];}); }
+function hhmmFromTs(ts){
+  if(!ts) return '–';
+  var d=new Date(ts*1000); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+}
+function renderWeatherContext(d){
+  var el=document.getElementById('simWeatherContext');
+  if(!el) return;
+  if(!d||!d.available){ el.innerHTML='<b>Wetterkontext:</b> keine Live-Daten verfügbar.'; return; }
+  var h='<b>Wetterkontext (nächste 24h)</b><br>Sonnenaufgang: '+hhmmFromTs(d.sunrise)+' | Sonnenuntergang: '+hhmmFromTs(d.sunset)+' | Daten '+(d.stale?'veraltet':'frisch');
+  if(d.hourly24h&&d.hourly24h.length){
+    h+='<table style=\"margin-top:8px\"><tr><th>Zeit</th><th>Temp</th><th>Regen</th><th>Wahrsch.</th></tr>';
+    d.hourly24h.forEach(function(it){ h+='<tr><td>'+hhmmFromTs(it.ts)+'</td><td>'+esc(it.temp)+'°C</td><td>'+esc(it.precipMm)+' mm</td><td>'+esc(it.precipPct)+'%</td></tr>';});
+    h+='</table>';
+  }
+  el.innerHTML=h;
+}
 function runSim(){
   var body='slotIndex='+encodeURIComponent(document.getElementById('slotIndex').value)
     +'&simTime='+encodeURIComponent(document.getElementById('simTime').value)
@@ -630,13 +662,15 @@ function runSim(){
       +'<div style=\"padding:10px;border:1px solid #ddd;border-radius:6px;background:#fafafa\">'
       +'<p><b>Status:</b> <span style=\"color:'+color+'\">'+esc(d.action)+'</span></p>'
       +'<p><b>Grund:</b> '+esc(d.reason)+'</p>'
+      +'<p><b>Trigger:</b> '+esc(d.triggerSource||'–')+'</p>'
+      +'<p><b>Sonnenaufgang/Sonnenuntergang:</b> '+esc(d.sunrise||'–')+' / '+esc(d.sunset||'–')+'</p>'
       +'<p><b>Wetter:</b> '+esc(d.weatherJustification||'–')+'</p>'
       +'<p><b>Warnungen:</b> '+esc(d.warnings||'–')+'</p>'
       +'<p><b>Triggerzeit:</b> '+esc(d.triggerTime||'–')+' | <b>Tag passt:</b> '+(d.dayMatched?'ja':'nein')+' | <b>Minute passt:</b> '+(d.triggerMatched?'ja':'nein')+'</p>'
       +'<p><b>Gesamtdauer:</b> '+esc(d.totalDurationSec||0)+' s</p>';
     if(d.plan && d.plan.length){
-      h+='<table><tr><th>#</th><th>Pumpe</th><th>Laufzeit</th><th>Basis</th></tr>';
-      d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td></tr>'; });
+      h+='<table><tr><th>#</th><th>Pumpe</th><th>Aktion</th><th>Laufzeit</th><th>Basis</th><th>Grund</th></tr>';
+      d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(p.action)+'</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td><td>'+esc(p.reason||'')+' ('+esc(p.policySource||'')+')</td></tr>'; });
       h+='</table>';
     } else {
       h+='<p style=\"color:#999\">Keine Pumpen-Ausf&#252;hrung geplant.</p>';

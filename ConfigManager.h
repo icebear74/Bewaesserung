@@ -71,6 +71,10 @@ struct HardwareConfig {
 #define MAX_SLOTS           16
 #define MAX_SLOT_ASSIGNMENTS 32
 
+// Repeat mode
+#define REPEAT_WEEKDAYS      0   // Weekly by weekday bitmask (days)
+#define REPEAT_INTERVAL_DAYS 1   // Every N days from intervalAnchorDay
+
 struct WateringSlot {
     char    name[32]          = "";
     bool    enabled           = true;
@@ -79,16 +83,27 @@ struct WateringSlot {
     uint8_t fixedMinute       = 0;     // 0–59
     int16_t offsetMinutes     = 0;     // signed offset in minutes (for TRIGGER_OFFSET)
     uint8_t offsetBase        = OFFSET_BASE_SUNRISE; // OFFSET_BASE_*
+    uint8_t repeatMode        = REPEAT_WEEKDAYS;
     uint8_t days              = 0x7F;  // bitmask bit0=Mon … bit6=Sun (default all days)
+    uint8_t intervalDays      = 1;     // every N days (REPEAT_INTERVAL_DAYS)
+    uint16_t intervalAnchorDay = 0;    // epoch-day anchor for interval mode (local)
 
-    // Weather skip conditions  (0.0 / -99.0 = not active)
+    // Legacy slot-level weather policy (kept for backward compatibility).
+    // New configs should use assignment-level weather policy.
     float   skipIfRainMm      = 0.0f;  // skip if daily expected precipitation >= x mm
     float   skipIfRainPct     = 0.0f;  // skip if precipitation probability >= x %
     float   runOnlyAboveTemp  = -99.0f;// skip if current temperature < x °C
 
-    // Weather reduce conditions
     float   reduceIfRainMm    = 0.0f;  // reduce duration if daily precip >= x mm
     uint8_t reducePct         = 50;    // percentage to reduce (1–99)
+};
+
+struct WeatherPolicy {
+    float   skipIfRainMm     = 0.0f;   // 0 = disabled
+    float   skipIfRainPct    = 0.0f;   // 0 = disabled
+    float   runOnlyAboveTemp = -99.0f; // -99 = disabled
+    float   reduceIfRainMm   = 0.0f;   // 0 = disabled
+    uint8_t reducePct        = 50;     // 1..99
 };
 
 // Assignment: one pump runs for a given duration when a slot fires
@@ -96,6 +111,8 @@ struct SlotPumpAssignment {
     uint8_t slotIndex   = 0;    // index into SlotConfig.slots[]
     uint8_t pumpIndex   = 0;    // index into HardwareConfig.pumps[]
     int     durationSec = 60;
+    bool    useOwnWeatherPolicy = false; // false => use legacy slot weather for migration
+    WeatherPolicy weather;
 };
 
 struct SlotConfig {
@@ -123,6 +140,11 @@ struct WeatherData {
     float   dailyPrecipPct = 0.0f;   // today's max precipitation probability (%)
     time_t  sunrise        = 0;      // today's sunrise (local epoch)
     time_t  sunset         = 0;      // today's sunset  (local epoch)
+    uint8_t hourlyCount    = 0;      // number of valid forecast samples (max 24)
+    time_t  hourlyTime[24] = {0};
+    float   hourlyTemp[24] = {0};
+    float   hourlyPrecipMm[24] = {0};
+    float   hourlyPrecipPct[24] = {0};
     time_t  lastUpdate     = 0;      // when data was last successfully fetched
     bool    available      = false;  // true if data has been fetched at least once
 };

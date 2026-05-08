@@ -39,9 +39,10 @@ bool WeatherManager::fetchNow() {
         "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
         "precipitation,rain,snowfall,wind_speed_10m,wind_direction_10m,"
         "precipitation_probability"
+        "&hourly=time,temperature_2m,precipitation,precipitation_probability"
         "&daily=sunrise,sunset,precipitation_sum,"
         "precipitation_probability_max,temperature_2m_max,temperature_2m_min"
-        "&forecast_days=1&timezone=auto",
+        "&forecast_days=1&forecast_hours=24&timezone=auto",
         dc.latitude, dc.longitude);
 
     // Use WiFiClientSecure; certificate verification is skipped because
@@ -99,6 +100,12 @@ bool WeatherManager::parseResponse(const String& body) {
     filter["daily"]["precipitation_probability_max"][0] = true;
     filter["daily"]["temperature_2m_max"][0]         = true;
     filter["daily"]["temperature_2m_min"][0]         = true;
+    for (int i = 0; i < 24; i++) {
+        filter["hourly"]["time"][i] = true;
+        filter["hourly"]["temperature_2m"][i] = true;
+        filter["hourly"]["precipitation"][i] = true;
+        filter["hourly"]["precipitation_probability"][i] = true;
+    }
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
@@ -130,6 +137,28 @@ bool WeatherManager::parseResponse(const String& body) {
         _data.dailyPrecipPct = (float)(daily["precipitation_probability_max"][0] | 0);
         _data.tempMax        = daily["temperature_2m_max"][0]         | 0.0f;
         _data.tempMin        = daily["temperature_2m_min"][0]         | 0.0f;
+    }
+
+    _data.hourlyCount = 0;
+    JsonObject hourly = doc["hourly"];
+    if (!hourly.isNull()) {
+        JsonArray ta = hourly["time"].as<JsonArray>();
+        JsonArray tempA = hourly["temperature_2m"].as<JsonArray>();
+        JsonArray mmA = hourly["precipitation"].as<JsonArray>();
+        JsonArray pctA = hourly["precipitation_probability"].as<JsonArray>();
+        int n = ta.size();
+        if (tempA.size() < (size_t)n) n = tempA.size();
+        if (mmA.size() < (size_t)n) n = mmA.size();
+        if (pctA.size() < (size_t)n) n = pctA.size();
+        if (n > 24) n = 24;
+        _data.hourlyCount = (uint8_t)n;
+        for (int i = 0; i < n; i++) {
+            const char* ts = ta[i] | "";
+            _data.hourlyTime[i] = parseIso8601Local(ts);
+            _data.hourlyTemp[i] = tempA[i] | 0.0f;
+            _data.hourlyPrecipMm[i] = mmA[i] | 0.0f;
+            _data.hourlyPrecipPct[i] = (float)(pctA[i] | 0);
+        }
     }
 
     _data.lastUpdate = time(nullptr);

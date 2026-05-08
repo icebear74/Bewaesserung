@@ -80,13 +80,30 @@ void WateringScheduler::update() {
     if (nowMinute == _lastCheckedMinute) return;
     _lastCheckedMinute = nowMinute;
 
-    // Pre-fetch weather data shortly before each slot fires – the WeatherManager
-    // update() handles the actual HTTP fetch on its own schedule; we just ask it
-    // here so it can request a refresh if its data is due.
-    if (_wm) _wm->update();
-
     SlotConfig& sc = _cfg->getSlotConfig();
     HardwareConfig& hw = _cfg->getHardwareConfig();
+    // Preflight weather refresh: if a slot triggers in ~1 minute, request update
+    // before evaluating the execution decision.
+    if (_wm) {
+        bool preflightNeeded = false;
+        time_t inOneMinute = now + 60;
+        struct tm inOneTm;
+        localtime_r(&inOneMinute, &inOneTm);
+        for (int si = 0; si < sc.slotCount && !preflightNeeded; si++) {
+            bool usedFallback = false;
+            time_t t = WateringDecisionEngine::computeTriggerTime(
+                sc.slots[si], inOneMinute, _wm->isAvailable() ? &_wm->getData() : nullptr,
+                _wm->isAvailable(), &usedFallback);
+            if (t <= 0) continue;
+            struct tm tt;
+            localtime_r(&t, &tt);
+            if (tt.tm_hour == inOneTm.tm_hour && tt.tm_min == inOneTm.tm_min) {
+                preflightNeeded = true;
+            }
+        }
+        if (preflightNeeded) _wm->requestRefresh();
+        _wm->update();
+    }
     const WeatherData* weatherData = (_wm && _wm->isAvailable()) ? &_wm->getData() : nullptr;
     bool weatherAvailable = (_wm && _wm->isAvailable());
     bool weatherStale = (_wm && _wm->isStale());
@@ -123,6 +140,11 @@ void WateringScheduler::enqueueDecision(const WateringDecisionResult& decision) 
     int added = 0;
     for (int i = 0; i < decision.planCount; i++) {
         const WateringDecisionPumpPlan& pp = decision.plan[i];
+        if (pp.action == WATER_ACTION_SKIP || pp.durationSec <= 0) {
+            Serial.printf("[Sched] Pump %d for slot '%s' skipped by decision: %s\n",
+                          pp.pumpIndex, slot.name, pp.reason);
+            continue;
+        }
         // Check queue capacity (circular buffer)
         int nextTail = (_qTail + 1) % SCHEDULER_QUEUE_SIZE;
         if (nextTail == _qHead) {

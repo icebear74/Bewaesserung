@@ -16,6 +16,9 @@ struct WateringDecisionPumpPlan {
     uint8_t pumpIndex       = 0;
     int     baseDurationSec = 0;
     int     durationSec     = 0;
+    WateringDecisionAction action = WATER_ACTION_SKIP;
+    char    reason[120] = {0};
+    char    policySource[32] = {0};
 };
 
 struct WateringDecisionInput {
@@ -37,6 +40,7 @@ struct WateringDecisionResult {
     bool                  triggerMatched   = false;
     bool                  usedFallbackTime = false;
     time_t                triggerTime      = 0;
+    char                  triggerSource[96] = {0};
     WateringDecisionAction action          = WATER_ACTION_SKIP;
     char                  reason[160]      = {0};
     char                  weatherJustification[192] = {0};

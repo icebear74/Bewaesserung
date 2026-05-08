@@ -265,7 +265,10 @@ bool ConfigManager::loadSlotConfig() {
             s.fixedMinute     = (uint8_t)constrain((int)(so["fixedMinute"] | 0), 0, 59);
             s.offsetMinutes   = (int16_t)constrain((int)(so["offsetMinutes"] | 0), -720, 720);
             s.offsetBase      = (uint8_t)constrain((int)(so["offsetBase"] | 0), 0, 2);
+            s.repeatMode      = (uint8_t)constrain((int)(so["repeatMode"] | REPEAT_WEEKDAYS), REPEAT_WEEKDAYS, REPEAT_INTERVAL_DAYS);
             s.days            = (uint8_t)(so["days"] | 0x7F);
+            s.intervalDays    = (uint8_t)constrain((int)(so["intervalDays"] | 1), 1, 90);
+            s.intervalAnchorDay = (uint16_t)constrain((int)(so["intervalAnchorDay"] | 0), 0, 65535);
             s.skipIfRainMm    = so["skipIfRainMm"]   | 0.0f;
             s.skipIfRainPct   = so["skipIfRainPct"]  | 0.0f;
             s.runOnlyAboveTemp= so["runOnlyAboveTemp"]| -99.0f;
@@ -284,6 +287,12 @@ bool ConfigManager::loadSlotConfig() {
                 a.slotIndex   = (uint8_t)constrain((int)(ao["slotIndex"]   | 0), 0, MAX_SLOTS - 1);
                 a.pumpIndex   = (uint8_t)constrain((int)(ao["pumpIndex"]   | 0), 0, MAX_RELAY_COUNT - 1);
                 a.durationSec = constrain((int)(ao["durationSec"] | 60), 1, 7200);
+                a.useOwnWeatherPolicy = ao["useOwnWeatherPolicy"] | false;
+                a.weather.skipIfRainMm = ao["skipIfRainMm"] | 0.0f;
+                a.weather.skipIfRainPct = ao["skipIfRainPct"] | 0.0f;
+                a.weather.runOnlyAboveTemp = ao["runOnlyAboveTemp"] | -99.0f;
+                a.weather.reduceIfRainMm = ao["reduceIfRainMm"] | 0.0f;
+                a.weather.reducePct = (uint8_t)constrain((int)(ao["reducePct"] | 50), 1, 99);
             }
         }
         Serial.printf("[Config] Slot config loaded: %d slots, %d assignments.\n",
@@ -309,6 +318,9 @@ bool ConfigManager::loadSlotConfig() {
             s.fixedHour   = (uint8_t)constrain((int)(e["hour"]   | 6), 0, 23);
             s.fixedMinute = (uint8_t)constrain((int)(e["minute"] | 0), 0, 59);
             s.days        = (uint8_t)(e["days"] | 0x7F);
+            s.repeatMode  = REPEAT_WEEKDAYS;
+            s.intervalDays = 1;
+            s.intervalAnchorDay = 0;
 
             int aj = _slotConfig.assignCount++;
             SlotPumpAssignment& a = _slotConfig.assignments[aj];
@@ -344,7 +356,10 @@ bool ConfigManager::saveSlotConfig() {
         so["fixedMinute"]    = s.fixedMinute;
         so["offsetMinutes"]  = s.offsetMinutes;
         so["offsetBase"]     = s.offsetBase;
+        so["repeatMode"]     = s.repeatMode;
         so["days"]           = s.days;
+        so["intervalDays"]   = s.intervalDays;
+        so["intervalAnchorDay"] = s.intervalAnchorDay;
         so["skipIfRainMm"]   = s.skipIfRainMm;
         so["skipIfRainPct"]  = s.skipIfRainPct;
         so["runOnlyAboveTemp"] = s.runOnlyAboveTemp;
@@ -358,6 +373,12 @@ bool ConfigManager::saveSlotConfig() {
         ao["slotIndex"]   = a.slotIndex;
         ao["pumpIndex"]   = a.pumpIndex;
         ao["durationSec"] = a.durationSec;
+        ao["useOwnWeatherPolicy"] = a.useOwnWeatherPolicy;
+        ao["skipIfRainMm"] = a.weather.skipIfRainMm;
+        ao["skipIfRainPct"] = a.weather.skipIfRainPct;
+        ao["runOnlyAboveTemp"] = a.weather.runOnlyAboveTemp;
+        ao["reduceIfRainMm"] = a.weather.reduceIfRainMm;
+        ao["reducePct"] = a.weather.reducePct;
     }
     serializeJson(doc, f);
     f.close();
