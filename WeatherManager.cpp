@@ -31,9 +31,13 @@ bool WeatherManager::fetchNow() {
     if (!_cfg || WiFi.status() != WL_CONNECTED) return false;
 
     DeviceConfig& dc = _cfg->getDeviceConfig();
+    _lastHttpCode = 0;
     if (!std::isfinite(dc.latitude) || !std::isfinite(dc.longitude) ||
         dc.latitude < -90.0f || dc.latitude > 90.0f ||
         dc.longitude < -180.0f || dc.longitude > 180.0f) {
+        _lastRequestUrl[0] = '\0';
+        snprintf(_lastError, sizeof(_lastError),
+                 "Ungültige Koordinaten lat=%.4f lon=%.4f", dc.latitude, dc.longitude);
         Serial.printf("[Weather] Invalid coordinates lat=%.4f lon=%.4f; skipping fetch.\n",
                       dc.latitude, dc.longitude);
         _lastFetchMs = millis();  // back off; don't retry immediately
@@ -46,13 +50,15 @@ bool WeatherManager::fetchNow() {
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
-        "precipitation,rain,snowfall,wind_speed_10m,wind_direction_10m,"
-        "precipitation_probability"
-        "&hourly=time,temperature_2m,precipitation,precipitation_probability"
+        "precipitation,rain,showers,snowfall,is_day,wind_speed_10m,wind_direction_10m"
+        "&hourly=temperature_2m,precipitation,precipitation_probability"
         "&daily=sunrise,sunset,precipitation_sum,"
         "precipitation_probability_max,temperature_2m_max,temperature_2m_min"
         "&forecast_days=1&forecast_hours=24&timezone=auto",
         dc.latitude, dc.longitude);
+    strlcpy(_lastRequestUrl, url, sizeof(_lastRequestUrl));
+    _lastError[0] = '\0';
+    Serial.printf("[Weather] Request URL: %s\n", _lastRequestUrl);
 
     // Use WiFiClientSecure; certificate verification is skipped because
     // embedding the full CA chain in firmware is impractical.  Traffic is
@@ -64,8 +70,14 @@ bool WeatherManager::fetchNow() {
     http.begin(secureClient, url);
     http.setTimeout(WEATHER_HTTP_TIMEOUT_MS);
     int code = http.GET();
+    _lastHttpCode = code;
     if (code != 200) {
+        String errBody = http.getString();
+        snprintf(_lastError, sizeof(_lastError), "HTTP %d: %.220s", code, errBody.c_str());
         Serial.printf("[Weather] HTTP error %d from Open-Meteo.\n", code);
+        if (errBody.length()) {
+            Serial.printf("[Weather] Error body: %s\n", errBody.c_str());
+        }
         http.end();
         _lastFetchMs = millis();  // back off; don't retry immediately
         return false;
@@ -75,6 +87,11 @@ bool WeatherManager::fetchNow() {
     http.end();
 
     bool ok = parseResponse(body);
+    if (ok) {
+        _lastError[0] = '\0';
+    } else {
+        snprintf(_lastError, sizeof(_lastError), "JSON parse failed");
+    }
     _lastFetchMs = millis();
     return ok;
 }
@@ -102,7 +119,6 @@ bool WeatherManager::parseResponse(const String& body) {
     filter["current"]["snowfall"]                = true;
     filter["current"]["wind_speed_10m"]          = true;
     filter["current"]["wind_direction_10m"]      = true;
-    filter["current"]["precipitation_probability"] = true;
     filter["daily"]["sunrise"][0]                    = true;
     filter["daily"]["sunset"][0]                     = true;
     filter["daily"]["precipitation_sum"][0]          = true;
@@ -133,7 +149,7 @@ bool WeatherManager::parseResponse(const String& body) {
         _data.snow        = cur["snowfall"]                | 0.0f;
         _data.windSpeed   = cur["wind_speed_10m"]          | 0.0f;
         _data.windDir     = cur["wind_direction_10m"]      | 0.0f;
-        _data.precipProb  = (float)(cur["precipitation_probability"] | 0);
+        _data.precipProb  = 0.0f;
     }
 
     JsonObject daily = doc["daily"];
@@ -167,6 +183,9 @@ bool WeatherManager::parseResponse(const String& body) {
             _data.hourlyTemp[i] = tempA[i] | 0.0f;
             _data.hourlyPrecipMm[i] = mmA[i] | 0.0f;
             _data.hourlyPrecipPct[i] = (float)(pctA[i] | 0);
+        }
+        if (n > 0) {
+            _data.precipProb = _data.hourlyPrecipPct[0];
         }
     }
 

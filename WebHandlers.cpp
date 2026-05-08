@@ -52,6 +52,12 @@ static String formatUptime() {
     return String(buf);
 }
 
+static String formatKiB(size_t bytes) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.1f KiB", bytes / 1024.0f);
+    return String(buf);
+}
+
 static int daysFromCivil(int y, unsigned m, unsigned d) {
     y -= m <= 2;
     const int era = (y >= 0 ? y : y - 399) / 400;
@@ -284,6 +290,26 @@ static void handleStatus() {
 
     // ── Weather section ───────────────────────────────────────────────────────
     String weatherHtml;
+    {
+        size_t heapFree  = ESP.getFreeHeap();
+        size_t heapMin   = ESP.getMinFreeHeap();
+        size_t heapTotal = ESP.getHeapSize();
+        size_t psramFree = ESP.getFreePsram();
+        size_t psramTotal = ESP.getPsramSize();
+
+        weatherHtml += "<div style='margin-top:12px;padding:10px;border:1px solid #dde7dd;border-radius:6px;background:#f7fbff'>";
+        weatherHtml += "<h2 style='margin:0 0 8px 0;color:#1a4f8f'>🧠 Speicher</h2><table>";
+        weatherHtml += "<tr><td>Heap frei</td><td>" + formatKiB(heapFree) + "</td></tr>";
+        weatherHtml += "<tr><td>Heap Minimum</td><td>" + formatKiB(heapMin) + "</td></tr>";
+        weatherHtml += "<tr><td>Heap gesamt</td><td>" + formatKiB(heapTotal) + "</td></tr>";
+        if (psramTotal > 0) {
+            weatherHtml += "<tr><td>PSRAM frei</td><td>" + formatKiB(psramFree) + "</td></tr>";
+            weatherHtml += "<tr><td>PSRAM gesamt</td><td>" + formatKiB(psramTotal) + "</td></tr>";
+        } else {
+            weatherHtml += "<tr><td>PSRAM</td><td>nicht verfügbar</td></tr>";
+        }
+        weatherHtml += "</table></div>";
+    }
     if (wm && wm->isAvailable()) {
         const WeatherData& w = wm->getData();
         bool stale = wm->isStale();
@@ -336,14 +362,29 @@ static void handleStatus() {
                                : " <span style='color:#1a6b3c'>✅</span>";
             weatherHtml += "<tr><td>Letztes Update</td><td>" + String(buf) + age + "</td></tr>";
         }
+        if (wm->getLastHttpCode() != 0) {
+            weatherHtml += "<tr><td>Letzter HTTP-Status</td><td>" + String(wm->getLastHttpCode()) + "</td></tr>";
+        }
+        if (strlen(wm->getLastError()) > 0) {
+            weatherHtml += "<tr><td>Letzter Fehler</td><td><code>" + String(wm->getLastError()) + "</code></td></tr>";
+        }
+        if (strlen(wm->getLastRequestUrl()) > 0) {
+            weatherHtml += "<tr><td>Letzte URL</td><td><code style='word-break:break-all'>" + String(wm->getLastRequestUrl()) + "</code></td></tr>";
+        }
         weatherHtml += "</table></div>";
         weatherHtml += "</div></div>";  // flex + outer div
     } else if (wm) {
-        weatherHtml = "<div style='margin-top:16px;border-top:1px solid #eee;padding-top:12px'>"
-                      "<p style='color:#999'>🌤️ Keine Wetterdaten verfügbar (Internetverbindung erforderlich).</p>"
-                      "<button class='btn' style='margin-top:8px;padding:6px 14px;font-size:13px' "
-                      "onclick=\"fetch('/api/weather?refresh=1').then(()=>location.reload())\">🔄 Wetter aktualisieren</button>"
-                      "</div>";
+        weatherHtml += "<div style='margin-top:16px;border-top:1px solid #eee;padding-top:12px'>";
+        weatherHtml += "<p style='color:#999'>🌤️ Keine Wetterdaten verfügbar (Internetverbindung erforderlich).</p>";
+        if (strlen(wm->getLastError()) > 0) {
+            weatherHtml += "<p><b>Letzter Fehler:</b> <code>" + String(wm->getLastError()) + "</code></p>";
+        }
+        if (strlen(wm->getLastRequestUrl()) > 0) {
+            weatherHtml += "<p><b>Letzte URL:</b><br><code style='word-break:break-all'>" + String(wm->getLastRequestUrl()) + "</code></p>";
+        }
+        weatherHtml += "<button class='btn' style='margin-top:8px;padding:6px 14px;font-size:13px' ";
+        weatherHtml += "onclick=\"fetch('/api/weather?refresh=1').then(()=>location.reload())\">🔄 Wetter aktualisieren</button>";
+        weatherHtml += "</div>";
     }
     // ── Global next slot summary ───────────────────────────────────────────────
     {
@@ -1611,6 +1652,16 @@ static void handleApiWeather() {
         }
     } else {
         doc["available"] = false;
+    }
+    if (wm) {
+        doc["lastHttpCode"] = wm->getLastHttpCode();
+        doc["lastError"] = wm->getLastError();
+        doc["lastRequestUrl"] = wm->getLastRequestUrl();
+        doc["heapFree"] = (uint32_t)ESP.getFreeHeap();
+        doc["heapMin"] = (uint32_t)ESP.getMinFreeHeap();
+        doc["heapTotal"] = (uint32_t)ESP.getHeapSize();
+        doc["psramFree"] = (uint32_t)ESP.getFreePsram();
+        doc["psramTotal"] = (uint32_t)ESP.getPsramSize();
     }
     String json;
     serializeJson(doc, json);
