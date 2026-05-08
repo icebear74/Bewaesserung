@@ -10,10 +10,12 @@
 #include "RelayManager.h"
 #include "WeatherManager.h"
 #include "WateringScheduler.h"
+#include "WateringDecisionEngine.h"
 #include <WebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <math.h>
+#include <time.h>
 
 // ─── Module-level state ───────────────────────────────────────────────────────
 
@@ -77,7 +79,9 @@ static void handleSaveHardware();
 static void handleRelayTest();
 static void handleConfigWatering();
 static void handleSaveWatering();
+static void handleWateringTest();
 static void handleApiWeather();
+static void handleApiWateringSimulate();
 static void handleNotFound();
 
 // ─── Register ─────────────────────────────────────────────────────────────────
@@ -100,7 +104,9 @@ void registerHandlers(WebServerManager* wsm, Application* app) {
     g_server->on("/relay_test",      HTTP_POST, handleRelayTest);
     g_server->on("/config_watering", HTTP_GET,  handleConfigWatering);
     g_server->on("/save_watering",   HTTP_POST, handleSaveWatering);
+    g_server->on("/watering_test",   HTTP_GET,  handleWateringTest);
     g_server->on("/api/weather",     HTTP_GET,  handleApiWeather);
+    g_server->on("/api/watering_simulate", HTTP_POST, handleApiWateringSimulate);
     g_server->onNotFound(handleNotFound);
 
     Serial.println("[Web] Routes registered.");
@@ -757,12 +763,14 @@ static void handleRelayTest() {
 
 static String buildSlotRowHtml(int si, const WateringSlot& slot,
                                 const SlotConfig& sc, const HardwareConfig& hw) {
+    (void)sc;
+    (void)hw;
     const char* dayLabels[] = {"Mo","Di","Mi","Do","Fr","Sa","So"};
     const char* trigLabels[] = {"Feste Uhrzeit","Sonnenaufgang","Sonnenuntergang",
                                  "Mittagszeit","Offset (relativ)"};
     const char* baseLabels[] = {"Sonnenaufgang","Sonnenuntergang","Mittagszeit"};
     String r;
-    r.reserve(2000);
+    r.reserve(1700);
     r += "<div class=\"pump-entry\" id=\"slot"; r += si;
     r += "\" style=\"border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9\">";
     // Header
@@ -776,6 +784,15 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<button type=\"button\" onclick=\"deleteSlot("; r += si;
     r += ")\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
     r += "</div>";
+    r += "</div>";
+    char summaryBuf[220];
+    snprintf(summaryBuf, sizeof(summaryBuf),
+             "Auslöser: %s | Zeit/Fallback: %02u:%02u | Skip Regen: %.1fmm / %.0f%% | Min. Temp: %.1fC | Reduktion: %.1fmm -> -%u%%",
+             trigLabels[slot.triggerType], slot.fixedHour, slot.fixedMinute,
+             slot.skipIfRainMm, slot.skipIfRainPct, slot.runOnlyAboveTemp,
+             slot.reduceIfRainMm, slot.reducePct);
+    r += "<div style=\"font-size:12px;color:#456;margin-bottom:8px\">";
+    r += String(summaryBuf);
     r += "</div>";
     r += "<div id=\"slotBody"; r += si; r += "\" style=\"display:none\">";
     // Enabled + Name row
@@ -847,51 +864,99 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<input type=\"number\" name=\"s"; r += si; r += "_reducePct\" value=\"";
     r += slot.reducePct; r += "\" min=\"1\" max=\"99\"></div>";
     r += "</div></details>";
-    // Pump assignments for this slot
-    r += "<div style=\"margin-top:10px\"><b>Schritt 2: &#128167; Pumpenzuweisungen</b>";
-    r += "<div id=\"assigns"; r += si; r += "\">";
-    // Render existing assignments for this slot
-    int assignDisplayIdx = 0;
-    for (int ai = 0; ai < sc.assignCount; ai++) {
-        if (sc.assignments[ai].slotIndex != (uint8_t)si) continue;
-        const SlotPumpAssignment& a = sc.assignments[ai];
-        r += "<div class=\"form-row\" style=\"margin-top:6px;align-items:center\" id=\"arow";
-        r += si; r += "_"; r += assignDisplayIdx; r += "\">";
-        r += "<div class=\"form-col\"><label>Pumpe</label><select name=\"a";
-        r += si; r += "_"; r += assignDisplayIdx; r += "_pump\">";
-        for (int pi = 0; pi < hw.relayCount; pi++) {
-            r += "<option value=\""; r += pi; r += "\"";
-            if (a.pumpIndex == (uint8_t)pi) r += " selected";
-            r += ">";
-            if (hw.pumps[pi].name[0]) r += String(hw.pumps[pi].name);
-            else { r += "Pumpe "; r += (pi + 1); }
-            r += "</option>";
-        }
-        r += "</select></div>";
-        r += "<div class=\"form-col\"><label>Dauer (s)</label>";
-        r += "<input type=\"number\" name=\"a"; r += si; r += "_"; r += assignDisplayIdx;
-        r += "_duration\" value=\""; r += a.durationSec; r += "\" min=\"1\" max=\"7200\"></div>";
-        r += "<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">";
-        r += "<button type=\"button\" onclick=\"editAssign("; r += si; r += ","; r += assignDisplayIdx;
-        r += ")\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>";
-        r += "<button type=\"button\" onclick=\"deleteAssign("; r += si; r += ","; r += assignDisplayIdx;
-        r += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
-        r += "</div></div>";
-        assignDisplayIdx++;
-    }
-    r += "</div>";  // assigns{si}
-    // hidden field tracking number of assignments for this slot
-    r += "<input type=\"hidden\" name=\"s"; r += si; r += "_assignCount\" id=\"aCount";
-    r += si; r += "\" value=\""; r += assignDisplayIdx; r += "\">";
-    if (hw.relayCount > 0) {
-        r += "<button type=\"button\" onclick=\"addAssign("; r += si;
-        r += ")\" style=\"margin-top:6px;padding:4px 12px;background:#17a2b8;color:#fff;"
-             "border:none;border-radius:4px;cursor:pointer\">+ Pumpe hinzuf&#252;gen</button>";
-    } else {
-        r += "<p style=\"color:#dc3545;font-size:13px\">&#x26A0; Zuerst Pumpen in der Hardware-Konfiguration anlegen.</p>";
-    }
-    r += "</div></div></div>";  // pump-assignments + slot-entry + slotBody
+    r += "</div></div>";  // slot-entry + slotBody
     return r;
+}
+
+static String getSlotLabel(const WateringSlot& slot, int idx) {
+    String name = slot.name[0] ? String(slot.name) : ("Slot " + String(idx + 1));
+    return String(idx + 1) + " - " + name;
+}
+
+static String getPumpLabel(const HardwareConfig& hw, int idx) {
+    if (idx < 0 || idx >= hw.relayCount) return "Ungültige Pumpe";
+    return hw.pumps[idx].name[0] ? String(hw.pumps[idx].name) : ("Pumpe " + String(idx + 1));
+}
+
+static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig& hw) {
+    String html;
+    int displayIdx = 0;
+    for (int ai = 0; ai < sc.assignCount; ai++) {
+        const SlotPumpAssignment& a = sc.assignments[ai];
+        if (a.slotIndex >= (uint8_t)sc.slotCount) continue;
+        if (a.pumpIndex >= (uint8_t)hw.relayCount) continue;
+
+        html += "<div class=\"form-row\" style=\"margin-top:6px;align-items:center\" id=\"asrow";
+        html += displayIdx;
+        html += "\">";
+        html += "<div class=\"form-col\"><label>Slot</label><select name=\"as";
+        html += displayIdx;
+        html += "_slot\">";
+        for (int si = 0; si < sc.slotCount; si++) {
+            html += "<option value=\""; html += si; html += "\"";
+            if (a.slotIndex == (uint8_t)si) html += " selected";
+            html += ">";
+            html += getSlotLabel(sc.slots[si], si);
+            html += "</option>";
+        }
+        html += "</select></div>";
+
+        html += "<div class=\"form-col\"><label>Pumpe</label><select name=\"as";
+        html += displayIdx;
+        html += "_pump\">";
+        for (int pi = 0; pi < hw.relayCount; pi++) {
+            html += "<option value=\""; html += pi; html += "\"";
+            if (a.pumpIndex == (uint8_t)pi) html += " selected";
+            html += ">";
+            html += getPumpLabel(hw, pi);
+            html += "</option>";
+        }
+        html += "</select></div>";
+
+        html += "<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as";
+        html += displayIdx;
+        html += "_duration\" value=\"";
+        html += a.durationSec;
+        html += "\" min=\"1\" max=\"7200\"></div>";
+
+        html += "<div style=\"padding-top:20px;display:flex;gap:6px;flex-wrap:wrap\">";
+        html += "<button type=\"button\" onclick=\"editAssignment(";
+        html += displayIdx;
+        html += ")\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button>";
+        html += "<button type=\"button\" onclick=\"deleteAssignment(";
+        html += displayIdx;
+        html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
+        html += "</div></div>";
+        displayIdx++;
+    }
+    return html;
+}
+
+static String buildPumpSlotOverviewHtml(const SlotConfig& sc, const HardwareConfig& hw) {
+    if (hw.relayCount == 0) {
+        return "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
+    }
+    String html = "<table><tr><th>Pumpe</th><th>Zugewiesene Slots</th></tr>";
+    for (int pi = 0; pi < hw.relayCount; pi++) {
+        html += "<tr><td>";
+        html += getPumpLabel(hw, pi);
+        html += "</td><td>";
+        bool found = false;
+        for (int ai = 0; ai < sc.assignCount; ai++) {
+            const SlotPumpAssignment& a = sc.assignments[ai];
+            if (a.pumpIndex != (uint8_t)pi || a.slotIndex >= (uint8_t)sc.slotCount) continue;
+            if (found) html += "<br>";
+            html += getSlotLabel(sc.slots[a.slotIndex], a.slotIndex);
+            html += " (";
+            html += a.durationSec;
+            html += "s)";
+            found = true;
+        }
+        if (!found) html += "<span style='color:#999'>Keine Zuweisung</span>";
+        html += "</td></tr>";
+    }
+    html += "</table>";
+    return html;
 }
 
 static void handleConfigWatering() {
@@ -914,8 +979,7 @@ static void handleConfigWatering() {
     }
     page = replaceToken(page, "{watering_status}", wateringStatus);
 
-    // Pump names JSON array for JavaScript add-assign function
-    // Use ArduinoJson to ensure all special characters are properly escaped
+    // Pump names JSON array for JavaScript assignment editor
     {
         JsonDocument pumpNamesDoc;
         JsonArray arr = pumpNamesDoc.to<JsonArray>();
@@ -927,16 +991,32 @@ static void handleConfigWatering() {
         serializeJson(arr, pumpNamesJson);
         page = replaceToken(page, "{pump_names_json}", pumpNamesJson);
     }
+    // Slot names JSON array for assignment editor
+    {
+        JsonDocument slotNamesDoc;
+        JsonArray arr = slotNamesDoc.to<JsonArray>();
+        for (int i = 0; i < sc.slotCount; i++) {
+            arr.add(getSlotLabel(sc.slots[i], i));
+        }
+        String slotNamesJson;
+        serializeJson(arr, slotNamesJson);
+        page = replaceToken(page, "{slot_names_json}", slotNamesJson);
+    }
     page = replaceToken(page, "{pumpCount}", String(hw.relayCount));
     page = replaceToken(page, "{slotCount}", String(sc.slotCount));
+    page = replaceToken(page, "{assignCount}", String(sc.assignCount));
 
     // Build slot rows
     String slotRowsHtml;
     for (int i = 0; i < sc.slotCount; i++) {
         slotRowsHtml += buildSlotRowHtml(i, sc.slots[i], sc, hw);
     }
+    String assignmentRowsHtml = buildAssignmentRowsHtml(sc, hw);
     page = replaceToken(page, "{slot_rows_html}", slotRowsHtml);
+    page = replaceToken(page, "{assignment_rows_html}", assignmentRowsHtml);
+    page = replaceToken(page, "{pump_assignment_overview_html}", buildPumpSlotOverviewHtml(sc, hw));
     page = replaceToken(page, "{noSlotsMsg}", sc.slotCount == 0 ? "block" : "none");
+    page = replaceToken(page, "{noAssignmentsMsg}", sc.assignCount == 0 ? "block" : "none");
 
     g_server->send(200, "text/html; charset=UTF-8", page);
     Serial.println("[Web] GET /config_watering");
@@ -958,6 +1038,8 @@ static void handleSaveWatering() {
     SlotConfig newSc;
     newSc.slotCount  = 0;
     newSc.assignCount = 0;
+    int slotRemap[MAX_SLOTS];
+    for (int i = 0; i < MAX_SLOTS; i++) slotRemap[i] = -1;
 
     for (int si = 0; si < slotCount; si++) {
         if (newSc.slotCount >= MAX_SLOTS) break;
@@ -966,7 +1048,9 @@ static void handleSaveWatering() {
         snprintf(key, sizeof(key), "s%d_name", si);
         if (!g_server->hasArg(key)) continue;  // slot was deleted
 
-        WateringSlot& s = newSc.slots[newSc.slotCount];
+        int mappedSlotIndex = newSc.slotCount;
+        slotRemap[si] = mappedSlotIndex;
+        WateringSlot& s = newSc.slots[mappedSlotIndex];
         s = WateringSlot{};
         strlcpy(s.name, g_server->arg(key).c_str(), sizeof(s.name));
 
@@ -1015,28 +1099,32 @@ static void handleSaveWatering() {
         snprintf(key, sizeof(key), "s%d_reducePct", si);
         s.reducePct = (uint8_t)constrain(
             g_server->hasArg(key) ? g_server->arg(key).toInt() : 50, 1, 99);
-
-        // Pump assignments for this slot
-        snprintf(key, sizeof(key), "s%d_assignCount", si);
-        int assignCount = g_server->hasArg(key) ? g_server->arg(key).toInt() : 0;
-
-        int curSlotIdx = newSc.slotCount;  // slot index in new config
-        for (int ai = 0; ai < assignCount && newSc.assignCount < MAX_SLOT_ASSIGNMENTS; ai++) {
-            char akey[32];
-            snprintf(akey, sizeof(akey), "a%d_%d_pump", si, ai);
-            if (!g_server->hasArg(akey)) continue;
-
-            SlotPumpAssignment& a = newSc.assignments[newSc.assignCount];
-            a.slotIndex = (uint8_t)curSlotIdx;
-            a.pumpIndex = (uint8_t)constrain(
-                g_server->arg(akey).toInt(), 0, hw.relayCount > 0 ? hw.relayCount - 1 : 0);
-
-            snprintf(akey, sizeof(akey), "a%d_%d_duration", si, ai);
-            a.durationSec = g_server->hasArg(akey) ?
-                constrain(g_server->arg(akey).toInt(), 1, 7200) : 60;
-            newSc.assignCount++;
-        }
         newSc.slotCount++;
+    }
+
+    int assignCount = constrain(
+        g_server->hasArg("assignCount") ? g_server->arg("assignCount").toInt() : 0,
+        0, MAX_SLOT_ASSIGNMENTS * 4);
+    for (int ai = 0; ai < assignCount && newSc.assignCount < MAX_SLOT_ASSIGNMENTS; ai++) {
+        char akey[32];
+        snprintf(akey, sizeof(akey), "as%d_slot", ai);
+        if (!g_server->hasArg(akey)) continue;
+        int oldSlotIndex = g_server->arg(akey).toInt();
+        if (oldSlotIndex < 0 || oldSlotIndex >= MAX_SLOTS) continue;
+        int newSlotIndex = slotRemap[oldSlotIndex];
+        if (newSlotIndex < 0 || newSlotIndex >= newSc.slotCount) continue;
+
+        snprintf(akey, sizeof(akey), "as%d_pump", ai);
+        if (!g_server->hasArg(akey)) continue;
+        int pumpIndex = constrain(g_server->arg(akey).toInt(), 0, hw.relayCount > 0 ? hw.relayCount - 1 : 0);
+
+        snprintf(akey, sizeof(akey), "as%d_duration", ai);
+        int durationSec = g_server->hasArg(akey) ? constrain(g_server->arg(akey).toInt(), 1, 7200) : 60;
+
+        SlotPumpAssignment& a = newSc.assignments[newSc.assignCount++];
+        a.slotIndex = (uint8_t)newSlotIndex;
+        a.pumpIndex = (uint8_t)pumpIndex;
+        a.durationSec = durationSec;
     }
 
     sc = newSc;
@@ -1048,6 +1136,143 @@ static void handleSaveWatering() {
     g_server->send(200, "text/html; charset=UTF-8", page);
     Serial.printf("[Web] POST /save_watering – %d slot(s), %d assignment(s) saved.\n",
                   sc.slotCount, sc.assignCount);
+}
+
+static time_t parseLocalDateTimeArg(const String& value) {
+    if (value.length() < 16) return 0;
+    struct tm t = {};
+    t.tm_year = value.substring(0, 4).toInt() - 1900;
+    t.tm_mon  = value.substring(5, 7).toInt() - 1;
+    t.tm_mday = value.substring(8, 10).toInt();
+    t.tm_hour = value.substring(11, 13).toInt();
+    t.tm_min  = value.substring(14, 16).toInt();
+    t.tm_sec  = 0;
+    t.tm_isdst = -1;
+    time_t ts = mktime(&t);
+    return (ts == (time_t)-1) ? 0 : ts;
+}
+
+static String formatTimeHM(time_t ts) {
+    if (ts <= 0) return "–";
+    struct tm t;
+    localtime_r(&ts, &t);
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
+    return String(buf);
+}
+
+static const char* actionToText(WateringDecisionAction action) {
+    switch (action) {
+        case WATER_ACTION_EXECUTE: return "execute";
+        case WATER_ACTION_REDUCE:  return "reduce";
+        case WATER_ACTION_FALLBACK:return "fallback";
+        default:                   return "skip";
+    }
+}
+
+static void handleWateringTest() {
+    ConfigManager*  cfg = g_app->getConfigManager();
+    SlotConfig&     sc  = cfg->getSlotConfig();
+
+    String page = buildPage(HTML_WATERING_TEST_PAGE);
+    JsonDocument slotsDoc;
+    JsonArray arr = slotsDoc.to<JsonArray>();
+    for (int i = 0; i < sc.slotCount; i++) {
+        JsonObject o = arr.add<JsonObject>();
+        o["idx"] = i;
+        o["name"] = getSlotLabel(sc.slots[i], i);
+    }
+    String slotsJson;
+    serializeJson(arr, slotsJson);
+    page = replaceToken(page, "{slot_options_json}", slotsJson);
+    g_server->send(200, "text/html; charset=UTF-8", page);
+    Serial.println("[Web] GET /watering_test");
+}
+
+static void handleApiWateringSimulate() {
+    if (g_server->method() != HTTP_POST) {
+        g_server->send(405, "text/plain", "Method Not Allowed");
+        return;
+    }
+
+    ConfigManager* cfg = g_app->getConfigManager();
+    SlotConfig& sc = cfg->getSlotConfig();
+    HardwareConfig& hw = cfg->getHardwareConfig();
+
+    int slotIndex = g_server->hasArg("slotIndex") ? g_server->arg("slotIndex").toInt() : -1;
+    time_t simNow = g_server->hasArg("simTime") ? parseLocalDateTimeArg(g_server->arg("simTime")) : 0;
+    String weatherState = g_server->hasArg("weatherState") ? g_server->arg("weatherState") : "fresh";
+
+    WeatherData simWeather = {};
+    if (g_server->hasArg("temperature"))    simWeather.temperature   = g_server->arg("temperature").toFloat();
+    if (g_server->hasArg("dailyPrecipMm"))  simWeather.dailyPrecipMm = g_server->arg("dailyPrecipMm").toFloat();
+    if (g_server->hasArg("dailyPrecipPct")) simWeather.dailyPrecipPct= g_server->arg("dailyPrecipPct").toFloat();
+    if (g_server->hasArg("precipMm"))       simWeather.precipMm      = g_server->arg("precipMm").toFloat();
+    if (g_server->hasArg("precipProb"))     simWeather.precipProb    = g_server->arg("precipProb").toFloat();
+    if (g_server->hasArg("tempMax"))        simWeather.tempMax       = g_server->arg("tempMax").toFloat();
+    if (g_server->hasArg("tempMin"))        simWeather.tempMin       = g_server->arg("tempMin").toFloat();
+
+    WeatherManager* wm = g_app->getWeatherManager();
+    const WeatherData* weatherPtr = nullptr;
+    bool weatherAvailable = false;
+    bool weatherStale = false;
+
+    if (weatherState == "live" && wm && wm->isAvailable()) {
+        weatherPtr = &wm->getData();
+        weatherAvailable = true;
+        weatherStale = wm->isStale();
+    } else if (weatherState == "unavailable") {
+        weatherPtr = nullptr;
+        weatherAvailable = false;
+        weatherStale = false;
+    } else {
+        if (wm && wm->isAvailable()) {
+            simWeather.sunrise = wm->getData().sunrise;
+            simWeather.sunset  = wm->getData().sunset;
+        }
+        weatherPtr = &simWeather;
+        weatherAvailable = true;
+        weatherStale = (weatherState == "stale");
+    }
+
+    WateringDecisionInput in;
+    in.slotConfig = &sc;
+    in.hardwareConfig = &hw;
+    in.weatherData = weatherPtr;
+    in.weatherAvailable = weatherAvailable;
+    in.weatherStale = weatherStale;
+    in.nowLocal = simNow;
+    in.slotIndex = slotIndex;
+    in.enforceDayMatch = true;
+    in.enforceTriggerMinute = true;
+
+    WateringDecisionResult result = WateringDecisionEngine::evaluateSlot(in);
+
+    JsonDocument doc;
+    doc["ok"] = result.validInput;
+    doc["slotIndex"] = result.slotIndex;
+    doc["action"] = actionToText(result.action);
+    doc["reason"] = result.reason;
+    doc["weatherJustification"] = result.weatherJustification;
+    doc["warnings"] = result.warnings;
+    doc["triggerMatched"] = result.triggerMatched;
+    doc["dayMatched"] = result.dayMatched;
+    doc["triggerTime"] = formatTimeHM(result.triggerTime);
+    doc["totalDurationSec"] = result.totalDurationSec;
+    doc["planCount"] = result.planCount;
+    JsonArray planArr = doc["plan"].to<JsonArray>();
+    for (int i = 0; i < result.planCount; i++) {
+        JsonObject p = planArr.add<JsonObject>();
+        p["order"] = i + 1;
+        p["pumpIndex"] = result.plan[i].pumpIndex;
+        p["pumpName"] = getPumpLabel(hw, result.plan[i].pumpIndex);
+        p["baseDurationSec"] = result.plan[i].baseDurationSec;
+        p["durationSec"] = result.plan[i].durationSec;
+    }
+
+    String json;
+    serializeJson(doc, json);
+    g_server->send(200, "application/json", json);
 }
 
 // ─── Weather API endpoint ─────────────────────────────────────────────────────

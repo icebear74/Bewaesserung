@@ -3,6 +3,7 @@
 #include "ConfigManager.h"
 #include "RelayManager.h"
 #include "WeatherManager.h"
+#include "WateringDecisionEngine.h"
 
 // Maximum number of pump activations that can be queued at once
 #define SCHEDULER_QUEUE_SIZE  MAX_SLOT_ASSIGNMENTS
@@ -27,17 +28,8 @@ private:
         uint8_t slotIndex   = 0;
     };
 
-    // Compute local trigger time for a slot; returns 0 on error
-    time_t computeTriggerTime(const WateringSlot& slot, time_t localNow) const;
-
-    // Returns true if weather conditions allow the slot to run
-    bool shouldRunSlot(const WateringSlot& slot) const;
-
-    // Returns effective duration, possibly reduced by weather
-    int  computeDuration(const WateringSlot& slot, int baseDuration) const;
-
-    // Add all pump assignments for a slot to the queue
-    void enqueueSlot(int slotIdx);
+    // Add one evaluated execution plan to the queue
+    void enqueueDecision(const WateringDecisionResult& decision);
 
     ConfigManager*  _cfg        = nullptr;
     RelayManager*   _rm         = nullptr;
