@@ -500,22 +500,33 @@ static void handleFsUploadChunk() {
         if (_fsUploadFile) {
             _fsUploadFile.close();
             if (LittleFS.exists(_fsUploadTarget)) LittleFS.remove(_fsUploadTarget);
-            if (!LittleFS.rename(_fsUploadTmp, _fsUploadTarget)) {
-                // Fallback: copy + delete
+            bool moved = LittleFS.rename(_fsUploadTmp, _fsUploadTarget);
+            if (!moved) {
+                // Fallback: manual copy — preserve temp file on any write error
                 File src = LittleFS.open(_fsUploadTmp, "r");
                 File dst = LittleFS.open(_fsUploadTarget, "w");
-                if (src && dst) {
+                bool copyOk = (src && dst);
+                if (copyOk) {
                     uint8_t buf[512];
                     while (src.available()) {
                         size_t n = src.readBytes((char*)buf, sizeof(buf));
-                        dst.write(buf, n);
+                        if (dst.write(buf, n) != n) { copyOk = false; break; }
                     }
                 }
                 if (src) src.close();
                 if (dst) dst.close();
-                LittleFS.remove(_fsUploadTmp);
+                if (copyOk) {
+                    LittleFS.remove(_fsUploadTmp);
+                    moved = true;
+                } else {
+                    // Partial write: remove the corrupt target, keep temp for diagnosis
+                    LittleFS.remove(_fsUploadTarget);
+                    Serial.printf("[FM] Fallback copy FAILED for %s; temp kept at %s\n",
+                                  _fsUploadTarget.c_str(), _fsUploadTmp.c_str());
+                }
             }
-            Serial.printf("[FM] Upload done -> %s (%u bytes)\n",
+            Serial.printf("[FM] Upload %s -> %s (%u bytes)\n",
+                          moved ? "done" : "FAILED",
                           _fsUploadTarget.c_str(), (unsigned)upload.totalSize);
         }
 
