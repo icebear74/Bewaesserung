@@ -105,6 +105,7 @@ static bool dayMatches(const WateringSlot& slot, time_t localTs) {
     struct tm t;
     localtime_r(&localTs, &t);
     if (slot.repeatMode == REPEAT_INTERVAL_DAYS) {
+        // Defensive clamp: persisted/manual JSON edits can bypass UI validation.
         int every = slot.intervalDays < 1 ? 1 : slot.intervalDays;
         int today = localEpochDay(localTs);
         int anchor = slot.intervalAnchorDay;
@@ -159,6 +160,8 @@ static bool metricUsesWindow(uint8_t metric) {
 }
 
 static void formatMetricName(uint8_t metric, uint8_t windowHours, char* dst, size_t dstSize) {
+    // Keep wording aligned with the UI labels in WebHandlers.cpp / WebPages.h so
+    // simulation, status and configuration describe the same rule semantics.
     switch (metric) {
         case WEATHER_METRIC_CURRENT_TEMP:
             snprintf(dst, dstSize, "aktuelle Temperatur");

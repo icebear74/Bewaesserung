@@ -592,6 +592,8 @@ function deleteSlot(si){
   if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0)document.getElementById('noSlotsMsg').style.display='block';
   refreshAssignmentSlotOptions();
 }
+// Reihenfolge muss zu den C++-Enums in ConfigManager.h passen:
+// WeatherRuleActionType, WeatherRuleMetric, WeatherRuleComparison.
 var weatherRuleActionLabels=['Aussetzen','Laufzeit verkürzen','Laufzeit verlängern'];
 var weatherRuleMetricLabels=['Aktuelle Temperatur','Max. Temperatur in Zeitfenster','Aktueller Niederschlag (mm)','Aktuelle Regenwahrscheinlichkeit (%)','Regen heute (mm)','Regenwahrscheinlichkeit heute (%)','Regenmenge im Zeitfenster (mm)','Max. Regenwahrscheinlichkeit im Zeitfenster (%)'];
 var weatherRuleOperatorLabels=['>','>=','<','<='];

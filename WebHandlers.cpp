@@ -1062,6 +1062,7 @@ static String getWeatherTemplateLabel(const SlotConfig& sc, int idx) {
 }
 
 static const char* weatherRuleActionLabel(uint8_t actionType) {
+    // Keep synchronized with the JavaScript label arrays in WebPages.h.
     switch (actionType) {
         case WEATHER_RULE_REDUCE_RUNTIME: return "Laufzeit verkürzen";
         case WEATHER_RULE_INCREASE_RUNTIME: return "Laufzeit verlängern";
@@ -1070,6 +1071,7 @@ static const char* weatherRuleActionLabel(uint8_t actionType) {
 }
 
 static const char* weatherRuleMetricLabel(uint8_t metric) {
+    // Keep synchronized with the JavaScript label arrays in WebPages.h.
     switch (metric) {
         case WEATHER_METRIC_CURRENT_TEMP: return "Aktuelle Temperatur";
         case WEATHER_METRIC_FORECAST_TEMP_MAX: return "Max. Temperatur in Zeitfenster";
