@@ -231,7 +231,9 @@ static bool compareMetric(float actual, uint8_t comparison, float threshold) {
         case WEATHER_OP_GTE: return actual >= threshold;
         case WEATHER_OP_LT:  return actual < threshold;
         case WEATHER_OP_LTE: return actual <= threshold;
-        default:             return false;
+        default:
+            Serial.printf("[Watering] Ungültiger Vergleichsoperator: %u\n", comparison);
+            return false;
     }
 }
 
@@ -566,6 +568,7 @@ WateringDecisionResult WateringDecisionEngine::evaluateSlot(const WateringDecisi
             }
 
             if (matchedAdjustCount > 0) {
+                if (adjustmentDelta < -99) adjustmentDelta = -99;
                 p.adjustmentPercent = adjustmentDelta;
                 long adjusted = (long)p.baseDurationSec * (long)(100 + adjustmentDelta) / 100L;
                 if (adjusted < 1) adjusted = 1;

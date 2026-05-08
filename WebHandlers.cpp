@@ -1064,9 +1064,10 @@ static String getWeatherTemplateLabel(const SlotConfig& sc, int idx) {
 static const char* weatherRuleActionLabel(uint8_t actionType) {
     // Keep synchronized with the JavaScript label arrays in WebPages.h.
     switch (actionType) {
+        case WEATHER_RULE_SKIP: return "Aussetzen";
         case WEATHER_RULE_REDUCE_RUNTIME: return "Laufzeit verkürzen";
         case WEATHER_RULE_INCREASE_RUNTIME: return "Laufzeit verlängern";
-        default: return "Aussetzen";
+        default: return "Unbekannt";
     }
 }
 

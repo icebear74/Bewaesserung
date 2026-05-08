@@ -24,14 +24,6 @@ static WeatherPolicy makeSlotLegacyPolicy(const WateringSlot& slot) {
     return policy;
 }
 
-static bool weatherPolicyEquals(const WeatherPolicy& a, const WeatherPolicy& b) {
-    return a.skipIfRainMm == b.skipIfRainMm &&
-           a.skipIfRainPct == b.skipIfRainPct &&
-           a.runOnlyAboveTemp == b.runOnlyAboveTemp &&
-           a.reduceIfRainMm == b.reduceIfRainMm &&
-           a.reducePct == b.reducePct;
-}
-
 static void clearWeatherPolicy(WeatherPolicy& policy) {
     policy = WeatherPolicy{};
 }
@@ -124,8 +116,7 @@ static int ensureWeatherTemplate(SlotConfig& sc, const char* preferredName, cons
     appendLegacyPolicyRules(legacyTemplate, policy);
 
     for (int i = 0; i < sc.weatherTemplateCount; i++) {
-        if (weatherTemplateRulesEqual(sc.weatherTemplates[i], legacyTemplate) ||
-            (sc.weatherTemplates[i].ruleCount == 0 && weatherPolicyEquals(sc.weatherTemplates[i].weather, policy))) {
+        if (weatherTemplateRulesEqual(sc.weatherTemplates[i], legacyTemplate)) {
             return i;
         }
     }
