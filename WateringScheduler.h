@@ -5,6 +5,7 @@
 #include "RelayManager.h"
 #include "WeatherManager.h"
 #include "WateringDecisionEngine.h"
+#include "WateringRunLog.h"
 
 // Maximum number of pump activations that can be queued at once
 #define SCHEDULER_QUEUE_SIZE  MAX_SLOT_ASSIGNMENTS
@@ -16,6 +17,9 @@ public:
 
     void begin(ConfigManager* cfg, RelayManager* rm, WeatherManager* wm);
     void update();  // call from main loop every iteration
+
+    // Inject a run-log instance; must be called before the first update()
+    void setRunLog(WateringRunLog* log) { _runLog = log; }
 
     // True while at least one pump is active or the queue is non-empty
     bool isBusy() const;
@@ -36,6 +40,7 @@ private:
     ConfigManager*  _cfg        = nullptr;
     RelayManager*   _rm         = nullptr;
     WeatherManager* _wm         = nullptr;
+    WateringRunLog* _runLog     = nullptr;
 
     // Circular queue for pump runs
     QueueItem     _queue[SCHEDULER_QUEUE_SIZE];

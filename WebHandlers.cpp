@@ -11,10 +11,13 @@
 #include "WeatherManager.h"
 #include "WateringScheduler.h"
 #include "WateringDecisionEngine.h"
+#include "WateringRunLog.h"
+#include "FileManager.h"
 #include <WebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
+#include <LittleFS.h>
 #include <math.h>
 #include <time.h>
 
@@ -23,6 +26,20 @@
 static WebServerManager* g_wsm    = nullptr;
 static Application*      g_app    = nullptr;
 static WebServer*         g_server = nullptr;
+
+// ─── PSRAM allocator (shared by backup / runlog handlers) ────────────────────
+
+struct WhPsramAllocator : ArduinoJson::Allocator {
+    void* allocate(size_t size) override {
+        void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return p ? p : malloc(size);
+    }
+    void deallocate(void* pointer) override { free(pointer); }
+    void* reallocate(void* ptr, size_t new_size) override {
+        void* p = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return p ? p : realloc(ptr, new_size);
+    }
+};
 
 // ─── Utility: string replace ──────────────────────────────────────────────────
 
@@ -150,6 +167,16 @@ void registerHandlers(WebServerManager* wsm, Application* app) {
     g_server->on("/api/weather",     HTTP_GET,  handleApiWeather);
     g_server->on("/api/watering_simulate", HTTP_POST, handleApiWateringSimulate);
     g_server->on("/api/watering_status", HTTP_GET, handleApiWateringStatus);
+    // Run log
+    g_server->on("/runlog",          HTTP_GET,  handleRunLog);
+    g_server->on("/api/runlog",      HTTP_GET,  handleApiRunLog);
+    g_server->on("/api/runlog/clear", HTTP_POST, handleApiRunLogClear);
+    // Backup / Restore
+    g_server->on("/backup",          HTTP_GET,  handleBackupPage);
+    g_server->on("/api/backup",      HTTP_GET,  handleApiBackup);
+    g_server->on("/api/restore",     HTTP_POST, handleRestoreBegin, handleRestoreUploadChunk);
+    // File manager (/fs and sub-routes)
+    setupFileManagerRoutes(g_server);
     g_server->onNotFound(handleNotFound);
 
     Serial.println("[Web] Routes registered.");
@@ -2169,8 +2196,159 @@ static void handleApiWateringStatus() {
     g_server->send(200, "application/json", json);
 }
 
+// ─── Run log page ─────────────────────────────────────────────────────────────
+
+static void handleRunLog() {
+    String page = buildPage(HTML_RUNLOG_PAGE);
+    g_server->send(200, "text/html; charset=UTF-8", page);
+}
+
+// ─── Run log API ──────────────────────────────────────────────────────────────
+
+static void handleApiRunLog() {
+    WateringRunLog* rl = g_app->getRunLog();
+    String json;
+    if (rl) rl->getJson(json);
+    else    json = "[]";
+    g_server->send(200, "application/json", json);
+}
+
+static void handleApiRunLogClear() {
+    WateringRunLog* rl = g_app->getRunLog();
+    if (rl) rl->clear();
+    g_server->send(200, "application/json", "{\"success\":true}");
+}
+
+// ─── Backup page ──────────────────────────────────────────────────────────────
+
+static void handleBackupPage() {
+    String page = buildPage(HTML_BACKUP_PAGE);
+    page.replace("{restore_msg}", "");
+    g_server->send(200, "text/html; charset=UTF-8", page);
+}
+
+// ─── Backup download – GET /api/backup ───────────────────────────────────────
+
+static void handleApiBackup() {
+    WhPsramAllocator alloc;
+    JsonDocument doc(&alloc);
+    doc["version"] = 1;
+    doc["ts"]      = (long long)time(nullptr);
+
+    // Embed each config file as a nested JSON object
+    const struct { const char* key; const char* path; } configFiles[] = {
+        { "config",   "/config.json"   },
+        { "hardware", "/hardware.json" },
+        { "watering", "/watering.json" },
+    };
+    for (size_t i = 0; i < 3; i++) {
+        if (!LittleFS.exists(configFiles[i].path)) continue;
+        File fh = LittleFS.open(configFiles[i].path, "r");
+        if (!fh) continue;
+        JsonDocument tmp(&alloc);
+        if (!deserializeJson(tmp, fh)) {
+            doc[configFiles[i].key] = tmp.as<JsonVariant>();
+        }
+        fh.close();
+    }
+
+    String json;
+    serializeJson(doc, json);
+    g_server->sendHeader("Content-Disposition",
+                         "attachment; filename=\"bewaesserung_backup.json\"");
+    g_server->send(200, "application/json", json);
+}
+
+// ─── Restore upload – POST /api/restore ──────────────────────────────────────
+
+static File _restoreFile;
+static bool _restoreReady = false;
+
+static void handleRestoreUploadChunk() {
+    if (!g_server) return;
+    if (g_server->uri() != "/api/restore") return;
+
+    HTTPUpload& upload = g_server->upload();
+
+    if (upload.status == UPLOAD_FILE_START) {
+        _restoreReady = false;
+        if (LittleFS.exists("/restore_tmp.json")) LittleFS.remove("/restore_tmp.json");
+        _restoreFile = LittleFS.open("/restore_tmp.json", "w");
+        if (!_restoreFile) Serial.println("[Restore] Cannot open temp file");
+        else               Serial.println("[Restore] Upload started");
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (_restoreFile) _restoreFile.write(upload.buf, upload.currentSize);
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (_restoreFile) {
+            _restoreFile.close();
+            _restoreReady = true;
+            Serial.printf("[Restore] Upload complete (%u bytes)\n", (unsigned)upload.totalSize);
+        }
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+        if (_restoreFile) { _restoreFile.close(); LittleFS.remove("/restore_tmp.json"); }
+        _restoreReady = false;
+    }
+}
+
+static void handleRestoreBegin() {
+    if (!_restoreReady) {
+        String page = buildPage(HTML_BACKUP_PAGE);
+        page.replace("{restore_msg}", "<div class='alert-danger'>&#10007; Upload fehlgeschlagen.</div>");
+        g_server->send(500, "text/html; charset=UTF-8", page);
+        return;
+    }
+
+    File f = LittleFS.open("/restore_tmp.json", "r");
+    if (!f) {
+        String page = buildPage(HTML_BACKUP_PAGE);
+        page.replace("{restore_msg}", "<div class='alert-danger'>&#10007; Temp-Datei nicht lesbar.</div>");
+        g_server->send(500, "text/html; charset=UTF-8", page);
+        return;
+    }
+
+    WhPsramAllocator alloc;
+    JsonDocument doc(&alloc);
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    LittleFS.remove("/restore_tmp.json");
+    _restoreReady = false;
+
+    if (err || !doc["version"].is<int>()) {
+        String page = buildPage(HTML_BACKUP_PAGE);
+        String msg = "<div class='alert-danger'>&#10007; Backup-Datei ung&uuml;ltig";
+        if (err) { msg += ": "; msg += err.c_str(); }
+        msg += ".</div>";
+        page.replace("{restore_msg}", msg);
+        g_server->send(400, "text/html; charset=UTF-8", page);
+        return;
+    }
+
+    int restored = 0;
+    const struct { const char* key; const char* path; } restoreFiles[] = {
+        { "config",   "/config.json"   },
+        { "hardware", "/hardware.json" },
+        { "watering", "/watering.json" },
+    };
+    for (size_t i = 0; i < 3; i++) {
+        if (!doc[restoreFiles[i].key].is<JsonObject>()) continue;
+        File fw = LittleFS.open(restoreFiles[i].path, "w");
+        if (!fw) { Serial.printf("[Restore] Cannot write %s\n", restoreFiles[i].path); continue; }
+        serializeJson(doc[restoreFiles[i].key], fw);
+        fw.close();
+        Serial.printf("[Restore] Restored %s\n", restoreFiles[i].path);
+        restored++;
+    }
+
+    String page = buildPage(HTML_BACKUP_PAGE);
+    String msg = "<div class='alert-info'>&#10003; ";
+    msg += restored;
+    msg += " Konfigurationsdatei(en) wiederhergestellt. Ger&auml;t startet neu...</div>";
+    page.replace("{restore_msg}", msg);
+    g_server->send(200, "text/html; charset=UTF-8", page);
+    g_app->scheduleRestart(3000);
+}
+
 static void handleNotFound() {
-    // Captive portal redirect in AP mode
     if (g_app->isApModeActive()) {
         g_server->sendHeader("Location", "/", true);
         g_server->send(302, "text/plain", "");

@@ -11,6 +11,7 @@ class RelayManager;
 class WebServerManager;
 class WeatherManager;
 class WateringScheduler;
+class WateringRunLog;
 
 class Application {
 public:
@@ -37,6 +38,7 @@ public:
     StateManager*     getStateManager()     { return _stateManager; }
     WeatherManager*   getWeatherManager()   { return _weatherManager; }
     WateringScheduler* getScheduler()       { return _scheduler; }
+    WateringRunLog*   getRunLog()           { return _runLog; }
 
 private:
     void startWifi();
@@ -54,6 +56,7 @@ private:
     WebServerManager*  _webServer      = nullptr;
     WeatherManager*    _weatherManager = nullptr;
     WateringScheduler* _scheduler      = nullptr;
+    WateringRunLog*    _runLog         = nullptr;
 
     bool          _configNeedsApply   = false;
     bool          _restartScheduled   = false;

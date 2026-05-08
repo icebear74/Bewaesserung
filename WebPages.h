@@ -58,6 +58,9 @@ input[type=checkbox]{width:auto;margin-right:8px}
   <a href="/config_hardware">Hardware</a>
   <a href="/config_watering">Bewässerung</a>
   <a href="/watering_test">Testlauf</a>
+  <a href="/runlog">Protokoll</a>
+  <a href="/backup">Backup</a>
+  <a href="/fs">Dateien</a>
 </nav>
 <div class="container">
 )rawhtml";
@@ -903,5 +906,101 @@ const char HTML_SAVED_LIVE[] PROGMEM = R"rawhtml(
   <p>Konfiguration gespeichert und sofort angewendet.</p>
   <a class="btn" href="{saved_back_url}" style="margin-top:12px">&#8592; Zur&#252;ck</a>
   <a class="btn" href="/status" style="margin-top:12px;margin-left:8px">Zum Status</a>
+</div>
+)rawhtml";
+
+// ─── Run Log Page ─────────────────────────────────────────────────────────────
+
+const char HTML_RUNLOG_PAGE[] PROGMEM = R"rawhtml(
+<div class="card">
+  <h1>&#128203; Bew&#228;sserungs-Protokoll</h1>
+  <p class="hint-text" style="margin-bottom:12px">
+    Zeigt die letzten Pumpen-Aktivierungen (neueste zuerst, max. 500 Eintr&#228;ge, rotierend).
+  </p>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn" onclick="loadLog()">&#8635; Aktualisieren</button>
+    <button class="btn btn-danger" onclick="clearLog()">&#128465; Protokoll l&ouml;schen</button>
+  </div>
+  <div id="logMsg" style="color:#dc3545;font-size:13px;min-height:18px;margin-bottom:8px"></div>
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead><tr><th>Datum / Uhrzeit</th><th>Slot</th><th>Pumpe</th><th>Dauer</th></tr></thead>
+      <tbody id="logBody"><tr><td colspan="4" style="color:#999">Lade...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<script>
+function esc(s){var d=document.createElement('div');d.appendChild(document.createTextNode(s||''));return d.innerHTML;}
+function fmtTs(t){
+  if(!t)return '–';
+  var d=new Date(t*1000);
+  var pad=function(n){return n<10?'0'+n:n;};
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())
+    +' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+async function loadLog(){
+  var tbody=document.getElementById('logBody');
+  tbody.innerHTML='<tr><td colspan="4" style="color:#999">Lade...</td></tr>';
+  try{
+    var r=await fetch('/api/runlog');
+    if(!r.ok){tbody.innerHTML='<tr><td colspan="4" style="color:#dc3545">Fehler '+r.status+'</td></tr>';return;}
+    var arr=await r.json();
+    if(!arr||arr.length===0){tbody.innerHTML='<tr><td colspan="4" style="color:#999">Keine Eintr&auml;ge.</td></tr>';return;}
+    var html='';
+    arr.forEach(function(e){
+      html+='<tr>'
+        +'<td>'+esc(fmtTs(e.t))+'</td>'
+        +'<td>'+esc(e.sn||'–')+'</td>'
+        +'<td>'+esc(e.pn||'–')+'</td>'
+        +'<td>'+esc(e.dur!=null?e.dur+' s':'–')+'</td>'
+        +'</tr>';
+    });
+    tbody.innerHTML=html;
+  }catch(ex){tbody.innerHTML='<tr><td colspan="4" style="color:#dc3545">'+esc(ex.toString())+'</td></tr>';}
+}
+async function clearLog(){
+  if(!confirm('Protokoll wirklich l\u00f6schen?'))return;
+  var r=await fetch('/api/runlog/clear',{method:'POST'});
+  if(r.ok){document.getElementById('logMsg').innerText='';loadLog();}
+  else document.getElementById('logMsg').innerText='Fehler beim L\u00f6schen.';
+}
+loadLog();
+</script>
+)rawhtml";
+
+// ─── Backup & Restore Page ────────────────────────────────────────────────────
+// Token: {restore_msg}  – filled server-side with success / error message
+
+const char HTML_BACKUP_PAGE[] PROGMEM = R"rawhtml(
+<div class="card">
+  <h1>&#128190; Backup &amp; Restore</h1>
+  {restore_msg}
+  <div class="config-section">
+    <h2>&#8595; Backup herunterladen</h2>
+    <p class="hint-text" style="margin-bottom:12px">
+      L&#228;dt eine einzige JSON-Datei herunter, die alle Konfigurationen enth&#228;lt
+      (WLAN, Zeit, Standort, Hardware, Bew&#228;sserungsplan).
+    </p>
+    <a class="btn" href="/api/backup">&#8595; Backup jetzt herunterladen</a>
+  </div>
+  <div class="config-section">
+    <h2>&#8593; Konfiguration wiederherstellen</h2>
+    <p class="hint-text" style="margin-bottom:12px">
+      W&#228;hlen Sie eine zuvor heruntergeladene Backup-Datei. Nach dem Hochladen wird die
+      Konfiguration wiederhergestellt und das Ger&#228;t neu gestartet.
+    </p>
+    <form action="/api/restore" method="POST" enctype="multipart/form-data">
+      <input type="file" name="backup" accept=".json" required
+             style="margin-bottom:10px;display:block">
+      <button type="submit" class="btn">&#8593; Restore starten</button>
+    </form>
+  </div>
+  <div class="config-section">
+    <h2>&#128193; Dateiverwaltung</h2>
+    <p class="hint-text" style="margin-bottom:12px">
+      Direkter Zugriff auf das LittleFS-Dateisystem f&#252;r erweiterte Verwaltungsaufgaben.
+    </p>
+    <a class="btn" href="/fs">Dateiverwaltung &#246;ffnen</a>
+  </div>
 </div>
 )rawhtml";

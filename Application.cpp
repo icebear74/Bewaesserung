@@ -9,6 +9,7 @@
 #include "WebServerManager.h"
 #include "WeatherManager.h"
 #include "WateringScheduler.h"
+#include "WateringRunLog.h"
 #include <ArduinoOTA.h>
 #include <Wire.h>
 
@@ -16,6 +17,7 @@ Application::Application() {}
 
 Application::~Application() {
     delete _scheduler;
+    delete _runLog;
     delete _weatherManager;
     delete _stateManager;
     delete _configManager;
@@ -85,8 +87,10 @@ void Application::begin() {
     _weatherManager = new WeatherManager();
     _weatherManager->begin(_configManager);
 
-    // 12. Watering scheduler
+    // 12. Watering scheduler + run log
+    _runLog   = new WateringRunLog();
     _scheduler = new WateringScheduler();
+    _scheduler->setRunLog(_runLog);
     _scheduler->begin(_configManager, _relayManager, _weatherManager);
 
     // 13. Final operational state

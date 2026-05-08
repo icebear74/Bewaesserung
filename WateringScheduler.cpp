@@ -77,6 +77,16 @@ void WateringScheduler::update() {
                 _pumpOffAt   = millis() + (unsigned long)item.durationSec * 1000UL;
                 Serial.printf("[Sched] Pump %d ON for %ds (slot %d).\n",
                               item.pumpIndex, item.durationSec, item.slotIndex);
+                // Log the activation to the rotating run log
+                if (_runLog) {
+                    SlotConfig&    sc = _cfg->getSlotConfig();
+                    HardwareConfig& hw = _cfg->getHardwareConfig();
+                    const char* slotName = (item.slotIndex < sc.slotCount)
+                                          ? sc.slots[item.slotIndex].name : "?";
+                    const char* pumpName = (item.pumpIndex < hw.relayCount)
+                                          ? hw.pumps[item.pumpIndex].name : "?";
+                    _runLog->append(time(nullptr), slotName, pumpName, item.durationSec);
+                }
             } else {
                 Serial.printf("[Sched] Pump %d could not be activated – skipped.\n",
                               item.pumpIndex);
