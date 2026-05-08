@@ -143,6 +143,15 @@ static bool findNextSlotDecision(int slotIndex,
                                  bool weatherStale,
                                  NextSlotDecisionInfo& out);
 
+// Forward declarations for handlers defined later in this file
+static void handleRunLog();
+static void handleApiRunLog();
+static void handleApiRunLogClear();
+static void handleBackupPage();
+static void handleApiBackup();
+static void handleRestoreBegin();
+static void handleRestoreUploadChunk();
+
 // ─── Register ─────────────────────────────────────────────────────────────────
 
 void registerHandlers(WebServerManager* wsm, Application* app) {
