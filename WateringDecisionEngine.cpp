@@ -3,7 +3,7 @@
 #include <time.h>
 
 static const time_t INVALID_TIME = 0;
-static const int MIN_ADJUSTMENT_PERCENT = -99;
+static const int MIN_ADJUSTMENT_PERCENT = -99; // keep at least 1% of the base runtime so duration never drops to 0
 
 static void setText(char* dst, size_t dstSize, const char* text) {
     if (!dst || dstSize == 0) return;
@@ -246,7 +246,8 @@ static bool forecastWindowHasSamples(const WeatherData& w, time_t nowLocal, uint
     if (lastIndex) *lastIndex = -1;
     if (w.hourlyCount == 0 || nowLocal <= INVALID_TIME) return false;
 
-    time_t endTs = nowLocal + (time_t)max((int)windowHours, 1) * 3600;
+    time_t windowSeconds = (time_t)max((int)windowHours, 1) * 3600;
+    time_t endTs = nowLocal + windowSeconds;
     bool found = false;
     for (int i = 0; i < w.hourlyCount; i++) {
         time_t ts = w.hourlyTime[i];

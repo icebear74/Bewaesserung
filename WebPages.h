@@ -592,11 +592,15 @@ function deleteSlot(si){
   if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0)document.getElementById('noSlotsMsg').style.display='block';
   refreshAssignmentSlotOptions();
 }
-// Muss in derselben Reihenfolge wie WeatherRuleActionType in ConfigManager.h bleiben.
+// Mapping zu ConfigManager.h:
+// - WeatherRuleActionType: [0]=SKIP, [1]=REDUCE_RUNTIME, [2]=INCREASE_RUNTIME
+// - WeatherRuleMetric: [0]=CURRENT_TEMP, [1]=FORECAST_TEMP_MAX, [2]=CURRENT_RAIN_MM,
+//   [3]=CURRENT_RAIN_PROB, [4]=DAILY_RAIN_MM, [5]=DAILY_RAIN_PROB,
+//   [6]=FORECAST_RAIN_SUM, [7]=FORECAST_RAIN_PROB_MAX
+// - WeatherRuleComparison: [0]=>, [1]=>=, [2]=<, [3]=<=
+// Muss in derselben Reihenfolge wie die C++-Enums in ConfigManager.h bleiben.
 var weatherRuleActionLabels=['Aussetzen','Laufzeit verkürzen','Laufzeit verlängern'];
-// Muss in derselben Reihenfolge wie WeatherRuleMetric in ConfigManager.h bleiben.
 var weatherRuleMetricLabels=['Aktuelle Temperatur','Max. Temperatur in Zeitfenster','Aktueller Niederschlag (mm)','Aktuelle Regenwahrscheinlichkeit (%)','Regen heute (mm)','Regenwahrscheinlichkeit heute (%)','Regenmenge im Zeitfenster (mm)','Max. Regenwahrscheinlichkeit im Zeitfenster (%)'];
-// Muss in derselben Reihenfolge wie WeatherRuleComparison in ConfigManager.h bleiben.
 var weatherRuleOperatorLabels=['>','>=','<','<='];
 var WEATHER_RULE_SKIP=0, WEATHER_RULE_REDUCE_RUNTIME=1, WEATHER_RULE_INCREASE_RUNTIME=2;
 var WEATHER_METRIC_CURRENT_TEMP=0, WEATHER_METRIC_FORECAST_TEMP_MAX=1, WEATHER_METRIC_CURRENT_RAIN_MM=2, WEATHER_METRIC_CURRENT_RAIN_PROB=3, WEATHER_METRIC_DAILY_RAIN_MM=4, WEATHER_METRIC_DAILY_RAIN_PROB=5, WEATHER_METRIC_FORECAST_RAIN_SUM=6, WEATHER_METRIC_FORECAST_RAIN_PROB_MAX=7;

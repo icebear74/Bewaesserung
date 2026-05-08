@@ -68,7 +68,8 @@ static int daysFromCivil(int y, unsigned m, unsigned d) {
 }
 
 static const int MAX_NEXT_SEARCH_DAYS = 90;
-static const int MAX_SUBMITTED_RULE_INDICES = MAX_WEATHER_RULES_PER_TEMPLATE * 4;
+static const int RULE_INDEX_SAFETY_MULTIPLIER = 4; // sparse UI deletes can leave holes in submitted indices
+static const int MAX_SUBMITTED_RULE_INDICES = MAX_WEATHER_RULES_PER_TEMPLATE * RULE_INDEX_SAFETY_MULTIPLIER;
 
 // ─── Common warning fragments ─────────────────────────────────────────────────
 

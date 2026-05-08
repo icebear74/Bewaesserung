@@ -61,4 +61,5 @@ private:
     bool          _apModeActive       = false;
     bool          _ds3231Present      = false;
     bool          _otaStarted         = false;
+    bool          _otaNetworkReadyLast = false;
 };

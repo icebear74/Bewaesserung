@@ -116,9 +116,11 @@ void Application::update() {
 
     _wifiManager->update();
 
-    if (_wifiManager->isConnected() || _wifiManager->isApModeActive()) {
+    bool otaNetworkReady = _wifiManager->isConnected() || _wifiManager->isApModeActive();
+    if (otaNetworkReady && !_otaNetworkReadyLast) {
         startOta();
     }
+    _otaNetworkReadyLast = otaNetworkReady;
 
     if (_relayManager) {
         _relayManager->update();

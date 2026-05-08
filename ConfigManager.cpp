@@ -440,7 +440,7 @@ bool ConfigManager::loadSlotConfig() {
                         rule.windowHours = (uint8_t)constrain((int)(ro["windowHours"] | 24), 1, 48);
                     }
                 } else {
-                    if (!wto["rules"].isNull()) {
+                    if (wto["rules"] && !wto["rules"].is<JsonArray>()) {
                         Serial.printf("[Config] Warning: weatherTemplates[%d].rules is not an array, using legacy fields.\n", i);
                     }
                     wt.weather.skipIfRainMm = wto["skipIfRainMm"] | 0.0f;
