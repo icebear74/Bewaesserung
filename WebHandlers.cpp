@@ -249,7 +249,7 @@ static void handleStatus() {
         // across both loops to avoid overflowing the 8 KB loopTask stack.
         NextSlotDecisionInfo* nextInfo = static_cast<NextSlotDecisionInfo*>(
             heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (!nextInfo) nextInfo = new (std::nothrow) NextSlotDecisionInfo();
+        if (!nextInfo) nextInfo = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
 
         for (int i = 0; i < hw.relayCount; i++) {
             RelayManager::PumpRuntimeInfo rt;
@@ -411,7 +411,7 @@ static void handleStatus() {
         bool fallbackActive = false;
         NextSlotDecisionInfo* nextInfo2 = static_cast<NextSlotDecisionInfo*>(
             heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (!nextInfo2) nextInfo2 = new (std::nothrow) NextSlotDecisionInfo();
+        if (!nextInfo2) nextInfo2 = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
         if (nextInfo2) {
             for (int si = 0; si < sc.slotCount; si++) {
                 if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo2)) continue;
@@ -1911,7 +1911,7 @@ static void handleApiWateringSimulate() {
     // Allocate decision result in PSRAM to avoid overflowing the 8 KB loopTask stack
     WateringDecisionResult* result = static_cast<WateringDecisionResult*>(
         heap_caps_calloc(1, sizeof(WateringDecisionResult), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!result) result = new (std::nothrow) WateringDecisionResult();
+    if (!result) result = static_cast<WateringDecisionResult*>(calloc(1, sizeof(WateringDecisionResult)));
     if (!result) {
         g_server->send(500, "text/plain", "OOM");
         return;
@@ -2064,7 +2064,7 @@ static void handleApiWateringStatus() {
     // both the slots and pumps loops to avoid overflowing the 8 KB loopTask stack.
     NextSlotDecisionInfo* nextInfo = static_cast<NextSlotDecisionInfo*>(
         heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!nextInfo) nextInfo = new (std::nothrow) NextSlotDecisionInfo();
+    if (!nextInfo) nextInfo = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
 
     for (int si = 0; si < sc.slotCount; si++) {
         const WateringSlot& slot = sc.slots[si];

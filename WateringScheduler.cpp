@@ -8,7 +8,7 @@ WateringScheduler::WateringScheduler() {
         heap_caps_calloc(1, sizeof(WateringDecisionResult), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!_decisionBuf) {
         // Fallback to internal heap if PSRAM is unavailable
-        _decisionBuf = new (std::nothrow) WateringDecisionResult();
+        _decisionBuf = static_cast<WateringDecisionResult*>(calloc(1, sizeof(WateringDecisionResult)));
     }
     if (!_decisionBuf) {
         Serial.println("[Sched] FATAL: failed to allocate decision buffer.");
