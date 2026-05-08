@@ -2,7 +2,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
-#include <math.h>
+#include <cmath>
 
 WeatherManager::WeatherManager() {}
 
@@ -31,7 +31,7 @@ bool WeatherManager::fetchNow() {
     if (!_cfg || WiFi.status() != WL_CONNECTED) return false;
 
     DeviceConfig& dc = _cfg->getDeviceConfig();
-    if (!isfinite(dc.latitude) || !isfinite(dc.longitude) ||
+    if (!std::isfinite(dc.latitude) || !std::isfinite(dc.longitude) ||
         dc.latitude < -90.0f || dc.latitude > 90.0f ||
         dc.longitude < -180.0f || dc.longitude > 180.0f) {
         Serial.printf("[Weather] Invalid coordinates lat=%.4f lon=%.4f; skipping fetch.\n",
