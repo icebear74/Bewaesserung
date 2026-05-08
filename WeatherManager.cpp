@@ -50,7 +50,7 @@ bool WeatherManager::fetchNow() {
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
-        "precipitation,rain,showers,snowfall,is_day,wind_speed_10m,wind_direction_10m"
+        "precipitation,rain,snowfall,wind_speed_10m,wind_direction_10m"
         "&hourly=temperature_2m,precipitation,precipitation_probability"
         "&daily=sunrise,sunset,precipitation_sum,"
         "precipitation_probability_max,temperature_2m_max,temperature_2m_min"
