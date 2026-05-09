@@ -728,6 +728,15 @@ static void handleConfigHardware() {
     HardwareConfig& hw = g_app->getConfigManager()->getHardwareConfig();
     String page = buildPage(HTML_HARDWARE_PAGE);
 
+    // ── Display section tokens ────────────────────────────────────────────────
+    page = replaceToken(page, "{dm0sel}", hw.displayMode == DISPLAY_OLED ? "selected" : "");
+    page = replaceToken(page, "{dm1sel}", hw.displayMode == DISPLAY_TFT  ? "selected" : "");
+    page = replaceToken(page, "{dm2sel}", hw.displayMode == DISPLAY_BOTH ? "selected" : "");
+    page = replaceToken(page, "{tftSectionDisplay}", hw.displayMode == DISPLAY_OLED ? "none" : "block");
+    page = replaceToken(page, "{tftCsPin}",  String(hw.tftCsPin));
+    page = replaceToken(page, "{tftRstPin}", String(hw.tftRstPin));
+    page = replaceToken(page, "{tftDcPin}",  String(hw.tftDcPin));
+
     // ── Expander section ──────────────────────────────────────────────────────
     page = replaceToken(page, "{expanderCount}", String(hw.expanderCount));
     String expanderRowsHtml;
@@ -789,6 +798,14 @@ static void handleSaveHardware() {
             if (g_server->hasArg(key)) strlcpy(e.name, g_server->arg(key).c_str(), sizeof(e.name));
         }
     }
+
+    // ── Parse display config ──────────────────────────────────────────────────
+    newHw.displayMode = (uint8_t)constrain(
+        g_server->hasArg("displayMode") ? g_server->arg("displayMode").toInt() : DISPLAY_OLED,
+        DISPLAY_OLED, DISPLAY_BOTH);
+    newHw.tftCsPin  = g_server->hasArg("tftCsPin")  ? g_server->arg("tftCsPin").toInt()  : 44;
+    newHw.tftRstPin = g_server->hasArg("tftRstPin") ? g_server->arg("tftRstPin").toInt() : 43;
+    newHw.tftDcPin  = g_server->hasArg("tftDcPin")  ? g_server->arg("tftDcPin").toInt()  : 4;
 
     // ── Parse pumps ───────────────────────────────────────────────────────────
     // pumpCount holds the highest allocated pump index (from JS _nextPumpIdx).

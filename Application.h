@@ -6,6 +6,7 @@ class ConfigManager;
 class WifiManager;
 class TimeSync;
 class OledStatus;
+class TftStatus;
 class Ds3231Manager;
 class RelayManager;
 class WebServerManager;
@@ -51,6 +52,7 @@ private:
     WifiManager*       _wifiManager    = nullptr;
     TimeSync*          _timeSync       = nullptr;
     OledStatus*        _oledStatus     = nullptr;
+    TftStatus*         _tftStatus      = nullptr;
     Ds3231Manager*     _ds3231         = nullptr;
     RelayManager*      _relayManager   = nullptr;
     WebServerManager*  _webServer      = nullptr;

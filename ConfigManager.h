@@ -14,6 +14,11 @@
 #define EXPANDER_TYPE_PCF8574 0   // PCF8574: 8 ports  (addresses 0x20–0x27)
 #define EXPANDER_TYPE_PCF8575 1   // PCF8575: 16 ports (addresses 0x20–0x27)
 
+// Display mode: which status display(s) are active
+#define DISPLAY_OLED  0   // SSD1306 I2C OLED only (default, backward-compatible)
+#define DISPLAY_TFT   1   // ST7735 SPI colour TFT only
+#define DISPLAY_BOTH  2   // SSD1306 + ST7735 simultaneously
+
 struct DeviceConfig {
     char hostname[32]    = "Bewaesserung";
     char ssid[64]        = "";
@@ -53,6 +58,16 @@ struct HardwareConfig {
     int           expanderCount = 0;
     ExpanderEntry expanders[MAX_EXPANDER_COUNT];
     bool          relayInverted = false;  // legacy global invert flag (kept for backward compat)
+
+    // ── Display configuration ─────────────────────────────────────────────────
+    // displayMode: DISPLAY_OLED (0) / DISPLAY_TFT (1) / DISPLAY_BOTH (2)
+    // Default 0 keeps existing behaviour for boards without a TFT wired.
+    uint8_t displayMode = DISPLAY_OLED;
+
+    // ST7735 SPI pin mapping (only used when displayMode != DISPLAY_OLED)
+    int tftCsPin  = 44;   // Chip-Select  (TFT_CS)
+    int tftRstPin = 43;   // Reset        (TFT_RST, -1 = tied to Arduino RESET)
+    int tftDcPin  = 4;    // Data/Command (TFT_DC)
 };
 
 // ─── Watering Slot / Trigger model ───────────────────────────────────────────

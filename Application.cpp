@@ -4,6 +4,7 @@
 #include "WifiManager.h"
 #include "TimeSync.h"
 #include "OledStatus.h"
+#include "TftStatus.h"
 #include "Ds3231Manager.h"
 #include "RelayManager.h"
 #include "WebServerManager.h"
@@ -24,6 +25,7 @@ Application::~Application() {
     delete _wifiManager;
     delete _timeSync;
     delete _oledStatus;
+    delete _tftStatus;
     delete _ds3231;
     delete _relayManager;
     delete _webServer;
@@ -34,27 +36,36 @@ void Application::begin() {
     _stateManager = new StateManager();
     _stateManager->setState(SystemState::BOOT);
 
-    // 2. I2C bus
-    Wire.begin();
-
-    // 3. OLED
-    _oledStatus = new OledStatus();
-    _oledStatus->begin();
-    _oledStatus->showBoot();
-    delay(500);
-
-    // 4. DS3231 RTC
-    _ds3231 = new Ds3231Manager();
-    _ds3231Present = _ds3231->begin();
-    _oledStatus->showDs3231Status(_ds3231Present);
-    delay(800);
-
-    // 5. Load config
-    _stateManager->setState(SystemState::LOADING_CONFIG);
-    _oledStatus->showState(SystemState::LOADING_CONFIG);
+    // 2. Load config from LittleFS (does not need Wire/I2C)
     _configManager = new ConfigManager();
     _configManager->begin();
-    delay(300);
+
+    // 3. I2C bus (needed by OLED and DS3231)
+    Wire.begin();
+
+    // 4. Display init based on hardware config
+    //    displayMode: DISPLAY_OLED (0) / DISPLAY_TFT (1) / DISPLAY_BOTH (2)
+    {
+        HardwareConfig& hw = _configManager->getHardwareConfig();
+        if (hw.displayMode == DISPLAY_OLED || hw.displayMode == DISPLAY_BOTH) {
+            _oledStatus = new OledStatus();
+            _oledStatus->begin();
+        }
+        if (hw.displayMode == DISPLAY_TFT || hw.displayMode == DISPLAY_BOTH) {
+            _tftStatus = new TftStatus(hw.tftCsPin, hw.tftDcPin, hw.tftRstPin);
+            _tftStatus->begin();
+        }
+    }
+    if (_oledStatus) _oledStatus->showBoot();
+    if (_tftStatus)  _tftStatus->showBoot();
+    delay(500);
+
+    // 5. DS3231 RTC
+    _ds3231 = new Ds3231Manager();
+    _ds3231Present = _ds3231->begin();
+    if (_oledStatus) _oledStatus->showDs3231Status(_ds3231Present);
+    if (_tftStatus)  _tftStatus->showDs3231Status(_ds3231Present);
+    delay(800);
 
     // 6. Set system time from DS3231 if present
     if (_ds3231Present) {
@@ -79,7 +90,8 @@ void Application::begin() {
     _timeSync = new TimeSync();
     if (_wifiManager->isConnected()) {
         _stateManager->setState(SystemState::TIME_SYNC);
-        _oledStatus->showState(SystemState::TIME_SYNC);
+        if (_oledStatus) _oledStatus->showState(SystemState::TIME_SYNC);
+        if (_tftStatus)  _tftStatus->showState(SystemState::TIME_SYNC);
         _timeSync->begin(_configManager->getDeviceConfig(), _ds3231);
     }
 
@@ -101,7 +113,8 @@ void Application::begin() {
     } else {
         _stateManager->setState(SystemState::SETUP_REQUIRED);
     }
-    _oledStatus->showState(_stateManager->getState());
+    if (_oledStatus) _oledStatus->showState(_stateManager->getState());
+    if (_tftStatus)  _tftStatus->showState(_stateManager->getState());
     Serial.printf("[App] Boot complete. State: %s\n", _stateManager->getStateString());
 }
 
@@ -148,9 +161,31 @@ void Application::update() {
 
     _webServer->handle(_apModeActive);
 
-    _oledStatus->update(_stateManager->getState(),
-                         _wifiManager->getLocalIP(),
-                         _wifiManager->getApSSID());
+    // ── Status displays ───────────────────────────────────────────────────────
+    // Collect pump active/enabled states once so both displays share the data.
+    bool pumpActive[MAX_RELAY_COUNT]  = {};
+    bool pumpEnabled[MAX_RELAY_COUNT] = {};
+    int  pumpCount = 0;
+    if (_configManager && _relayManager) {
+        HardwareConfig& hw = _configManager->getHardwareConfig();
+        pumpCount = hw.relayCount;
+        for (int i = 0; i < pumpCount; i++) {
+            pumpActive[i]  = _relayManager->isActive(i);
+            pumpEnabled[i] = hw.pumps[i].enabled;
+        }
+    }
+
+    if (_oledStatus) {
+        _oledStatus->update(_stateManager->getState(),
+                            _wifiManager->getLocalIP(),
+                            _wifiManager->getApSSID());
+    }
+    if (_tftStatus) {
+        _tftStatus->update(_stateManager->getState(),
+                           _wifiManager->getLocalIP(),
+                           _wifiManager->getApSSID(),
+                           pumpActive, pumpEnabled, pumpCount);
+    }
 }
 
 bool Application::isWateringLocked() const {
@@ -172,7 +207,8 @@ void Application::requestConfigApply() {
 
 void Application::startWifi() {
     _stateManager->setState(SystemState::WIFI_SCANNING);
-    _oledStatus->showState(SystemState::WIFI_SCANNING);
+    if (_oledStatus) _oledStatus->showState(SystemState::WIFI_SCANNING);
+    if (_tftStatus)  _tftStatus->showState(SystemState::WIFI_SCANNING);
 
     DeviceConfig& cfg = _configManager->getDeviceConfig();
 
@@ -181,11 +217,13 @@ void Application::startWifi() {
 
     if (connected) {
         _stateManager->setState(SystemState::WIFI_CONNECTED);
-        _oledStatus->showState(SystemState::WIFI_CONNECTED);
+        if (_oledStatus) _oledStatus->showState(SystemState::WIFI_CONNECTED);
+        if (_tftStatus)  _tftStatus->showState(SystemState::WIFI_CONNECTED);
         Serial.printf("[App] WiFi connected, IP: %s\n", _wifiManager->getLocalIP().c_str());
     } else if (_apModeActive) {
         _stateManager->setState(SystemState::WIFI_AP_MODE);
-        _oledStatus->showApMode(_wifiManager->getApSSID().c_str(), "192.168.4.1");
+        if (_oledStatus) _oledStatus->showApMode(_wifiManager->getApSSID().c_str(), "192.168.4.1");
+        if (_tftStatus)  _tftStatus->showApMode(_wifiManager->getApSSID().c_str(), "192.168.4.1");
     } else {
         Serial.println("[App] WiFi not connected, no AP mode.");
     }
@@ -238,6 +276,18 @@ void Application::executeApplyLiveConfig() {
     // Re-init scheduler with updated config
     if (_scheduler) {
         _scheduler->begin(_configManager, _relayManager, _weatherManager);
+    }
+    // Re-init displays based on (possibly updated) display config
+    HardwareConfig& hw = _configManager->getHardwareConfig();
+    delete _oledStatus; _oledStatus = nullptr;
+    delete _tftStatus;  _tftStatus  = nullptr;
+    if (hw.displayMode == DISPLAY_OLED || hw.displayMode == DISPLAY_BOTH) {
+        _oledStatus = new OledStatus();
+        _oledStatus->begin();
+    }
+    if (hw.displayMode == DISPLAY_TFT || hw.displayMode == DISPLAY_BOTH) {
+        _tftStatus = new TftStatus(hw.tftCsPin, hw.tftDcPin, hw.tftRstPin);
+        _tftStatus->begin();
     }
 }
 

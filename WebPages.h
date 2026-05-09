@@ -261,6 +261,7 @@ document.getElementById('locSearch').addEventListener('keydown', function(e){
 
 // ─── Hardware Config Page ─────────────────────────────────────────────────────
 // Tokens: {expanderCount} {expander_rows_html} {expanders_json} {pumpCount} {pump_rows_html}
+//         {displayMode} {tftCsPin} {tftRstPin} {tftDcPin}
 
 const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
@@ -272,6 +273,46 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
   <form method="POST" action="/save_hardware" id="hwForm">
 
     <h2 style="margin-top:18px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
+      &#128250; Display / Status-Anzeige
+    </h2>
+    <div class="alert-info" style="margin-bottom:8px">
+      <b>OLED (SSD1306, I2C)</b> und <b>TFT (ST7735, SPI)</b> k&#246;nnen einzeln oder
+      gemeinsam betrieben werden. Der TFT zeigt im Querformat zus&#228;tzlich den
+      Pumpen-Status als farbige Badges an.
+    </div>
+    <div class="form-row">
+      <div class="form-col">
+        <label>Display-Modus</label>
+        <select name="displayMode" id="displayModeSelect" onchange="onDisplayModeChange(this.value)">
+          <option value="0" {dm0sel}>Nur OLED (SSD1306, I2C)</option>
+          <option value="1" {dm1sel}>Nur TFT (ST7735, SPI)</option>
+          <option value="2" {dm2sel}>OLED + TFT (beide)</option>
+        </select>
+      </div>
+    </div>
+    <div id="tftPinSection" style="display:{tftSectionDisplay}">
+      <div class="alert-info" style="margin-top:6px;margin-bottom:8px">
+        Standard-Pinbelegung: <b>CS=44, RST=43, DC=4</b>.
+        MOSI und CLK nutzen automatisch die Hardware-SPI-Pins des ESP32 (MOSI=23, CLK=18).
+        RST=-1 verbindet den TFT-Reset mit dem Arduino-RESET-Pin.
+      </div>
+      <div class="form-row">
+        <div class="form-col">
+          <label>TFT CS-Pin</label>
+          <input type="number" name="tftCsPin" value="{tftCsPin}" min="-1" max="48">
+        </div>
+        <div class="form-col">
+          <label>TFT RST-Pin (-1 = Arduino RESET)</label>
+          <input type="number" name="tftRstPin" value="{tftRstPin}" min="-1" max="48">
+        </div>
+        <div class="form-col">
+          <label>TFT DC-Pin</label>
+          <input type="number" name="tftDcPin" value="{tftDcPin}" min="-1" max="48">
+        </div>
+      </div>
+    </div>
+
+    <h2 style="margin-top:22px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
       &#128268; Optionale Hardware (I2C Expander)
     </h2>
     <div class="alert-info" style="margin-bottom:8px">
@@ -441,6 +482,9 @@ function testRelay(idx,action){
   .then(function(r){return r.json();})
   .then(function(d){sp.textContent=d.msg;sp.style.color=d.ok?'#1a6b3c':'#dc3545';})
   .catch(function(){sp.textContent='Verbindungsfehler';sp.style.color='#dc3545';});
+}
+function onDisplayModeChange(v){
+  document.getElementById('tftPinSection').style.display=(v==='0')?'none':'block';
 }
 </script>
 )rawhtml";

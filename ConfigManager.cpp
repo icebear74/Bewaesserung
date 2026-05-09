@@ -216,6 +216,14 @@ bool ConfigManager::loadHardwareConfig() {
     _hardwareConfig.relayCount    = constrain((int)(doc["relayCount"] | 0), 0, MAX_RELAY_COUNT);
     _hardwareConfig.relayInverted = doc["relayInverted"] | false;
 
+    // ── Display config ────────────────────────────────────────────────────────
+    _hardwareConfig.displayMode = (uint8_t)constrain(
+        (int)(doc["displayMode"] | (int)DISPLAY_OLED),
+        (int)DISPLAY_OLED, (int)DISPLAY_BOTH);
+    _hardwareConfig.tftCsPin  = doc["tftCsPin"]  | 44;
+    _hardwareConfig.tftRstPin = doc["tftRstPin"] | 43;
+    _hardwareConfig.tftDcPin  = doc["tftDcPin"]  | 4;
+
     // ── Load optional hardware: expander chips ────────────────────────────────
     _hardwareConfig.expanderCount = 0;
     if (doc["expanders"].is<JsonArray>()) {
@@ -338,6 +346,10 @@ bool ConfigManager::saveHardwareConfig() {
     JsonDocument doc;
     doc["relayCount"]    = _hardwareConfig.relayCount;
     doc["relayInverted"] = _hardwareConfig.relayInverted;
+    doc["displayMode"]   = _hardwareConfig.displayMode;
+    doc["tftCsPin"]      = _hardwareConfig.tftCsPin;
+    doc["tftRstPin"]     = _hardwareConfig.tftRstPin;
+    doc["tftDcPin"]      = _hardwareConfig.tftDcPin;
     JsonArray expanders = doc["expanders"].to<JsonArray>();
     for (int i = 0; i < _hardwareConfig.expanderCount; i++) {
         const ExpanderEntry& e = _hardwareConfig.expanders[i];
