@@ -8,6 +8,12 @@ static bool weatherPolicyIsActive(const WeatherPolicy& policy) {
            policy.reduceIfRainMm > 0.0f;
 }
 
+static bool weatherRuleIsActive(const WeatherRule& rule) {
+    if (!rule.enabled) return false;
+    if (rule.actionType == WEATHER_RULE_SKIP) return true;
+    return rule.effectPercent > 0;
+}
+
 static WeatherPolicy makeSlotLegacyPolicy(const WateringSlot& slot) {
     WeatherPolicy policy;
     policy.skipIfRainMm = slot.skipIfRainMm;
@@ -16,14 +22,6 @@ static WeatherPolicy makeSlotLegacyPolicy(const WateringSlot& slot) {
     policy.reduceIfRainMm = slot.reduceIfRainMm;
     policy.reducePct = slot.reducePct;
     return policy;
-}
-
-static bool weatherPolicyEquals(const WeatherPolicy& a, const WeatherPolicy& b) {
-    return a.skipIfRainMm == b.skipIfRainMm &&
-           a.skipIfRainPct == b.skipIfRainPct &&
-           a.runOnlyAboveTemp == b.runOnlyAboveTemp &&
-           a.reduceIfRainMm == b.reduceIfRainMm &&
-           a.reducePct == b.reducePct;
 }
 
 static void clearWeatherPolicy(WeatherPolicy& policy) {
@@ -38,9 +36,87 @@ static void clearSlotLegacyWeather(WateringSlot& slot) {
     slot.reducePct = 50;
 }
 
+static void clearWeatherTemplateRules(WeatherTemplate& wt) {
+    wt.ruleCount = 0;
+    for (int i = 0; i < MAX_WEATHER_RULES_PER_TEMPLATE; i++) {
+        wt.rules[i] = WeatherRule{};
+    }
+}
+
+static bool weatherRuleEquals(const WeatherRule& a, const WeatherRule& b) {
+    return a.enabled == b.enabled &&
+           a.actionType == b.actionType &&
+           a.metric == b.metric &&
+           a.comparison == b.comparison &&
+           a.threshold == b.threshold &&
+           a.effectPercent == b.effectPercent &&
+           a.windowHours == b.windowHours;
+}
+
+static bool weatherTemplateRulesEqual(const WeatherTemplate& a, const WeatherTemplate& b) {
+    if (a.ruleCount != b.ruleCount) return false;
+    for (int i = 0; i < a.ruleCount; i++) {
+        if (!weatherRuleEquals(a.rules[i], b.rules[i])) return false;
+    }
+    return true;
+}
+
+static void addWeatherRule(WeatherTemplate& wt, const WeatherRule& rule) {
+    if (wt.ruleCount >= MAX_WEATHER_RULES_PER_TEMPLATE) return;
+    wt.rules[wt.ruleCount++] = rule;
+}
+
+static void appendLegacyPolicyRules(WeatherTemplate& wt, const WeatherPolicy& policy) {
+    clearWeatherTemplateRules(wt);
+
+    if (policy.skipIfRainMm > 0.0f) {
+        WeatherRule rule;
+        rule.actionType = WEATHER_RULE_SKIP;
+        rule.metric = WEATHER_METRIC_DAILY_RAIN_MM;
+        rule.comparison = WEATHER_OP_GTE;
+        rule.threshold = policy.skipIfRainMm;
+        addWeatherRule(wt, rule);
+    }
+    if (policy.skipIfRainPct > 0.0f) {
+        WeatherRule rule;
+        rule.actionType = WEATHER_RULE_SKIP;
+        rule.metric = WEATHER_METRIC_DAILY_RAIN_PROB;
+        rule.comparison = WEATHER_OP_GTE;
+        rule.threshold = policy.skipIfRainPct;
+        addWeatherRule(wt, rule);
+    }
+    if (policy.runOnlyAboveTemp > -99.0f) {
+        WeatherRule rule;
+        rule.actionType = WEATHER_RULE_SKIP;
+        rule.metric = WEATHER_METRIC_CURRENT_TEMP;
+        rule.comparison = WEATHER_OP_LT;
+        rule.threshold = policy.runOnlyAboveTemp;
+        addWeatherRule(wt, rule);
+    }
+    if (policy.reduceIfRainMm > 0.0f) {
+        WeatherRule rule;
+        rule.actionType = WEATHER_RULE_REDUCE_RUNTIME;
+        rule.metric = WEATHER_METRIC_DAILY_RAIN_MM;
+        rule.comparison = WEATHER_OP_GTE;
+        rule.threshold = policy.reduceIfRainMm;
+        rule.effectPercent = constrain((int)policy.reducePct, 1, 99);
+        addWeatherRule(wt, rule);
+    }
+}
+
+static bool weatherTemplateHasRules(const WeatherTemplate& wt) {
+    for (int i = 0; i < wt.ruleCount; i++) {
+        if (weatherRuleIsActive(wt.rules[i])) return true;
+    }
+    return false;
+}
+
 static int ensureWeatherTemplate(SlotConfig& sc, const char* preferredName, const WeatherPolicy& policy) {
+    WeatherTemplate legacyTemplate;
+    appendLegacyPolicyRules(legacyTemplate, policy);
+
     for (int i = 0; i < sc.weatherTemplateCount; i++) {
-        if (weatherPolicyEquals(sc.weatherTemplates[i].weather, policy)) {
+        if (weatherTemplateRulesEqual(sc.weatherTemplates[i], legacyTemplate)) {
             return i;
         }
     }
@@ -49,7 +125,8 @@ static int ensureWeatherTemplate(SlotConfig& sc, const char* preferredName, cons
     int idx = sc.weatherTemplateCount++;
     WeatherTemplate& wt = sc.weatherTemplates[idx];
     wt = WeatherTemplate{};
-    wt.weather = policy;
+    appendLegacyPolicyRules(wt, policy);
+    clearWeatherPolicy(wt.weather);
     if (preferredName && preferredName[0]) {
         strlcpy(wt.name, preferredName, sizeof(wt.name));
     } else {
@@ -89,6 +166,7 @@ bool ConfigManager::loadDeviceConfig() {
     strlcpy(_deviceConfig.hostname,     doc["hostname"]     | "Bewaesserung",              sizeof(_deviceConfig.hostname));
     strlcpy(_deviceConfig.ssid,         doc["ssid"]         | "",                           sizeof(_deviceConfig.ssid));
     strlcpy(_deviceConfig.password,     doc["password"]     | "",                           sizeof(_deviceConfig.password));
+    strlcpy(_deviceConfig.otaPassword,  doc["otaPassword"]  | "",                           sizeof(_deviceConfig.otaPassword));
     strlcpy(_deviceConfig.timezone,     doc["timezone"]     | "CET-1CEST,M3.5.0,M10.5.0/3",sizeof(_deviceConfig.timezone));
     strlcpy(_deviceConfig.ntpServer,    doc["ntpServer"]    | "pool.ntp.org",               sizeof(_deviceConfig.ntpServer));
     strlcpy(_deviceConfig.locationName, doc["locationName"] | "",                           sizeof(_deviceConfig.locationName));
@@ -108,6 +186,7 @@ bool ConfigManager::saveDeviceConfig() {
     doc["hostname"]     = _deviceConfig.hostname;
     doc["ssid"]         = _deviceConfig.ssid;
     doc["password"]     = _deviceConfig.password;
+    doc["otaPassword"]  = _deviceConfig.otaPassword;
     doc["timezone"]     = _deviceConfig.timezone;
     doc["ntpServer"]    = _deviceConfig.ntpServer;
     doc["latitude"]     = _deviceConfig.latitude;
@@ -136,6 +215,14 @@ bool ConfigManager::loadHardwareConfig() {
     }
     _hardwareConfig.relayCount    = constrain((int)(doc["relayCount"] | 0), 0, MAX_RELAY_COUNT);
     _hardwareConfig.relayInverted = doc["relayInverted"] | false;
+
+    // ── Display config ────────────────────────────────────────────────────────
+    _hardwareConfig.displayMode = (uint8_t)constrain(
+        (int)(doc["displayMode"] | (int)DISPLAY_OLED),
+        (int)DISPLAY_OLED, (int)DISPLAY_BOTH);
+    _hardwareConfig.tftCsPin  = doc["tftCsPin"]  | 44;
+    _hardwareConfig.tftRstPin = doc["tftRstPin"] | 43;
+    _hardwareConfig.tftDcPin  = doc["tftDcPin"]  | 4;
 
     // ── Load optional hardware: expander chips ────────────────────────────────
     _hardwareConfig.expanderCount = 0;
@@ -259,6 +346,10 @@ bool ConfigManager::saveHardwareConfig() {
     JsonDocument doc;
     doc["relayCount"]    = _hardwareConfig.relayCount;
     doc["relayInverted"] = _hardwareConfig.relayInverted;
+    doc["displayMode"]   = _hardwareConfig.displayMode;
+    doc["tftCsPin"]      = _hardwareConfig.tftCsPin;
+    doc["tftRstPin"]     = _hardwareConfig.tftRstPin;
+    doc["tftDcPin"]      = _hardwareConfig.tftDcPin;
     JsonArray expanders = doc["expanders"].to<JsonArray>();
     for (int i = 0; i < _hardwareConfig.expanderCount; i++) {
         const ExpanderEntry& e = _hardwareConfig.expanders[i];
@@ -342,11 +433,38 @@ bool ConfigManager::loadSlotConfig() {
                 wt = WeatherTemplate{};
                 JsonObject wto = wtArr[i].as<JsonObject>();
                 strlcpy(wt.name, wto["name"] | "", sizeof(wt.name));
-                wt.weather.skipIfRainMm = wto["skipIfRainMm"] | 0.0f;
-                wt.weather.skipIfRainPct = wto["skipIfRainPct"] | 0.0f;
-                wt.weather.runOnlyAboveTemp = wto["runOnlyAboveTemp"] | -99.0f;
-                wt.weather.reduceIfRainMm = wto["reduceIfRainMm"] | 0.0f;
-                wt.weather.reducePct = (uint8_t)constrain((int)(wto["reducePct"] | 50), 1, 99);
+                clearWeatherTemplateRules(wt);
+                if (wto["rules"].is<JsonArray>()) {
+                    JsonArray rules = wto["rules"].as<JsonArray>();
+                    for (JsonObject ro : rules) {
+                        if (wt.ruleCount >= MAX_WEATHER_RULES_PER_TEMPLATE) break;
+                        WeatherRule& rule = wt.rules[wt.ruleCount++];
+                        rule = WeatherRule{};
+                        rule.enabled = ro["enabled"] | true;
+                        rule.actionType = (uint8_t)constrain((int)(ro["actionType"] | WEATHER_RULE_SKIP),
+                                                             WEATHER_RULE_SKIP, WEATHER_RULE_INCREASE_RUNTIME);
+                        rule.metric = (uint8_t)constrain((int)(ro["metric"] | WEATHER_METRIC_DAILY_RAIN_MM),
+                                                         WEATHER_METRIC_CURRENT_TEMP, WEATHER_METRIC_FORECAST_RAIN_PROB_MAX);
+                        rule.comparison = (uint8_t)constrain((int)(ro["comparison"] | WEATHER_OP_GTE),
+                                                             WEATHER_OP_GT, WEATHER_OP_LTE);
+                        rule.threshold = ro["threshold"] | 0.0f;
+                        rule.effectPercent = (uint8_t)constrain((int)(ro["effectPercent"] | 25), 1, 200);
+                        rule.windowHours = (uint8_t)constrain((int)(ro["windowHours"] | 24), 1, 48);
+                    }
+                } else {
+                    if (wto["rules"] && !wto["rules"].is<JsonArray>()) {
+                        Serial.printf("[Config] Warning: weatherTemplates[%d].rules is not an array, using legacy fields.\n", i);
+                    }
+                    wt.weather.skipIfRainMm = wto["skipIfRainMm"] | 0.0f;
+                    wt.weather.skipIfRainPct = wto["skipIfRainPct"] | 0.0f;
+                    wt.weather.runOnlyAboveTemp = wto["runOnlyAboveTemp"] | -99.0f;
+                    wt.weather.reduceIfRainMm = wto["reduceIfRainMm"] | 0.0f;
+                    wt.weather.reducePct = (uint8_t)constrain((int)(wto["reducePct"] | 50), 1, 99);
+                    if (weatherPolicyIsActive(wt.weather)) {
+                        appendLegacyPolicyRules(wt, wt.weather);
+                        clearWeatherPolicy(wt.weather);
+                    }
+                }
             }
         }
 
@@ -480,16 +598,23 @@ bool ConfigManager::saveSlotConfig() {
         so["reducePct"]      = s.reducePct;
     }
     JsonArray wtArr = doc["weatherTemplates"].to<JsonArray>();
-    for (int i = 0; i < _slotConfig.weatherTemplateCount; i++) {
-        const WeatherTemplate& wt = _slotConfig.weatherTemplates[i];
-        JsonObject wto = wtArr.add<JsonObject>();
-        wto["name"] = wt.name;
-        wto["skipIfRainMm"] = wt.weather.skipIfRainMm;
-        wto["skipIfRainPct"] = wt.weather.skipIfRainPct;
-        wto["runOnlyAboveTemp"] = wt.weather.runOnlyAboveTemp;
-        wto["reduceIfRainMm"] = wt.weather.reduceIfRainMm;
-        wto["reducePct"] = wt.weather.reducePct;
-    }
+        for (int i = 0; i < _slotConfig.weatherTemplateCount; i++) {
+            const WeatherTemplate& wt = _slotConfig.weatherTemplates[i];
+            JsonObject wto = wtArr.add<JsonObject>();
+            wto["name"] = wt.name;
+            JsonArray rules = wto["rules"].to<JsonArray>();
+            for (int ri = 0; ri < wt.ruleCount; ri++) {
+                const WeatherRule& rule = wt.rules[ri];
+                JsonObject ro = rules.add<JsonObject>();
+                ro["enabled"] = rule.enabled;
+                ro["actionType"] = rule.actionType;
+                ro["metric"] = rule.metric;
+                ro["comparison"] = rule.comparison;
+                ro["threshold"] = rule.threshold;
+                ro["effectPercent"] = rule.effectPercent;
+                ro["windowHours"] = rule.windowHours;
+            }
+        }
     JsonArray aArr = doc["assignments"].to<JsonArray>();
     for (int j = 0; j < _slotConfig.assignCount; j++) {
         const SlotPumpAssignment& a = _slotConfig.assignments[j];

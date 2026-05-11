@@ -58,6 +58,9 @@ input[type=checkbox]{width:auto;margin-right:8px}
   <a href="/config_hardware">Hardware</a>
   <a href="/config_watering">Bewässerung</a>
   <a href="/watering_test">Testlauf</a>
+  <a href="/runlog">Protokoll</a>
+  <a href="/backup">Backup</a>
+  <a href="/fs">Dateien</a>
 </nav>
 <div class="container">
 )rawhtml";
@@ -109,20 +112,23 @@ const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
 )rawhtml";
 
 // ─── WiFi Config Page ─────────────────────────────────────────────────────────
-// Token {password_field}: rendered server-side – plain text on first setup,
-// masked on subsequent visits.
+// Tokens {password_field} {ota_password_field}: rendered server-side – plain
+// text on first setup, masked on subsequent visits.
 
 const char HTML_WIFI_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#128246; WLAN-Konfiguration</h1>
   <div class="alert-info">
-    &#8505;&#65039; Nach dem Speichern der WLAN-Einstellungen startet das Ger&#228;t neu und verbindet sich mit dem neuen Netzwerk.
+    &#8505;&#65039; Nach dem Speichern der WLAN-Einstellungen startet das Ger&#228;t neu und verbindet sich mit dem neuen Netzwerk.<br>
+    Das OTA-Passwort sch&#252;tzt drahtlose Firmware-Updates &uuml;ber das lokale WLAN.
   </div>
   <form method="POST" action="/save_wifi">
     <label for="ssid">WLAN-Name (SSID)</label>
     <input type="text" id="ssid" name="ssid" value="{ssid}" placeholder="Ihr WLAN-Name" maxlength="63">
     <label for="password">Passwort</label>
     {password_field}
+    <label for="otaPassword">OTA-Passwort <span title="Dieses Passwort wird f&#252;r drahtlose Firmware-Updates per WLAN verwendet. Leer lassen = bisheriges Passwort behalten.">ⓘ</span></label>
+    {ota_password_field}
     <label for="hostname">Ger&#228;tename (Hostname)</label>
     <input type="text" id="hostname" name="hostname" value="{hostname}" placeholder="Bewaesserung" maxlength="31">
     <div style="margin-top:8px">
@@ -255,6 +261,7 @@ document.getElementById('locSearch').addEventListener('keydown', function(e){
 
 // ─── Hardware Config Page ─────────────────────────────────────────────────────
 // Tokens: {expanderCount} {expander_rows_html} {expanders_json} {pumpCount} {pump_rows_html}
+//         {displayMode} {tftCsPin} {tftRstPin} {tftDcPin}
 
 const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
@@ -266,6 +273,46 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
   <form method="POST" action="/save_hardware" id="hwForm">
 
     <h2 style="margin-top:18px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
+      &#128250; Display / Status-Anzeige
+    </h2>
+    <div class="alert-info" style="margin-bottom:8px">
+      <b>OLED (SSD1306, I2C)</b> und <b>TFT (ST7735, SPI)</b> k&#246;nnen einzeln oder
+      gemeinsam betrieben werden. Der TFT zeigt im Querformat zus&#228;tzlich den
+      Pumpen-Status als farbige Badges an.
+    </div>
+    <div class="form-row">
+      <div class="form-col">
+        <label>Display-Modus</label>
+        <select name="displayMode" id="displayModeSelect" onchange="onDisplayModeChange(this.value)">
+          <option value="0" {dm0sel}>Nur OLED (SSD1306, I2C)</option>
+          <option value="1" {dm1sel}>Nur TFT (ST7735, SPI)</option>
+          <option value="2" {dm2sel}>OLED + TFT (beide)</option>
+        </select>
+      </div>
+    </div>
+    <div id="tftPinSection" style="display:{tftSectionDisplay}">
+      <div class="alert-info" style="margin-top:6px;margin-bottom:8px">
+        Standard-Pinbelegung: <b>CS=44, RST=43, DC=4</b>.
+        MOSI und CLK nutzen automatisch die Hardware-SPI-Pins des ESP32 (MOSI=23, CLK=18).
+        RST=-1 verbindet den TFT-Reset mit dem Arduino-RESET-Pin.
+      </div>
+      <div class="form-row">
+        <div class="form-col">
+          <label>TFT CS-Pin</label>
+          <input type="number" name="tftCsPin" value="{tftCsPin}" min="-1" max="48">
+        </div>
+        <div class="form-col">
+          <label>TFT RST-Pin (-1 = Arduino RESET)</label>
+          <input type="number" name="tftRstPin" value="{tftRstPin}" min="-1" max="48">
+        </div>
+        <div class="form-col">
+          <label>TFT DC-Pin</label>
+          <input type="number" name="tftDcPin" value="{tftDcPin}" min="-1" max="48">
+        </div>
+      </div>
+    </div>
+
+    <h2 style="margin-top:22px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
       &#128268; Optionale Hardware (I2C Expander)
     </h2>
     <div class="alert-info" style="margin-bottom:8px">
@@ -436,6 +483,9 @@ function testRelay(idx,action){
   .then(function(d){sp.textContent=d.msg;sp.style.color=d.ok?'#1a6b3c':'#dc3545';})
   .catch(function(){sp.textContent='Verbindungsfehler';sp.style.color='#dc3545';});
 }
+function onDisplayModeChange(v){
+  document.getElementById('tftPinSection').style.display=(v==='0')?'none':'block';
+}
 </script>
 )rawhtml";
 
@@ -451,8 +501,9 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
   {watering_status}
   <div class="alert-info">
     &#128161; <b>1) Slots</b> definieren nur Zeit und Wiederholung.<br>
-    <b>2) Wetter-Templates</b> enthalten alle Wetterregeln zentral.<br>
-    <b>3) Pumpen-Zuweisungen</b> verbinden Slot + Wetter-Template (oder kein Template) + Pumpe.
+    <b>2) Wetter-Templates</b> enthalten mehrere Wetterregeln pro Vorlage.<br>
+    <b>3) Pumpen-Zuweisungen</b> verbinden Slot + Wetter-Template (oder kein Template) + Pumpe.<br>
+    <span title="Wichtig für kombinierte Regeln: Erst werden Aussetzen-Regeln geprüft. Nur wenn keine davon greift, werden Verkürzen/Verlängern-Regeln relativ zur Basislaufzeit addiert.">ⓘ Reihenfolge der Wetterlogik</span>: zuerst Aussetzen, danach Laufzeit anpassen.
   </div>
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
     <input type="hidden" id="slotCount" name="slotCount" value="{slotCount}">
@@ -460,8 +511,8 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
     <input type="hidden" id="assignCount" name="assignCount" value="{assignCount}">
 
     <div class="config-section" style="margin-top:8px;padding-top:0;border-top:none">
-      <h2 style="color:#1a6b3c">1) Slots</h2>
-      <div class="hint-text" style="margin-bottom:10px">Slots beschreiben nur den Zeitpunkt und die Wiederholung.</div>
+      <h2 style="color:#1a6b3c">1) Slots <span title="Ein Slot beschreibt nur wann grundsätzlich geprüft wird: Uhrzeit, Sonnenaufgang/Sonnenuntergang, Offset und Wiederholung. Wetter gehört nicht hier hinein.">ⓘ</span></h2>
+      <div class="hint-text" style="margin-bottom:10px">Slots beschreiben nur den Zeitpunkt und die Wiederholung. Die Wetterlogik wird erst in der Zuweisung über ein Wetter-Template angewendet.</div>
       <div id="slots">{slot_rows_html}</div>
       <div id="noSlotsMsg" style="display:{noSlotsMsg};color:#999;font-style:italic;margin-bottom:8px">
         Noch kein Slot angelegt. Slot hinzuf&#252;gen &#8594;
@@ -472,8 +523,8 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
     </div>
 
     <div class="config-section">
-      <h2 style="color:#1a6b3c">2) Wetter-Templates</h2>
-      <div class="hint-text" style="margin-bottom:10px">Templates k&ouml;nnen mehreren Pumpen-Zuweisungen zugeordnet werden.</div>
+      <h2 style="color:#1a6b3c">2) Wetter-Templates <span title="Ein Wetter-Template ist eine Sammlung wiederverwendbarer Regeln. Ein einziges Template kann also z. B. Hitze-Verlängerung und Regen-Verkürzung gleichzeitig enthalten.">ⓘ</span></h2>
+      <div class="hint-text" style="margin-bottom:10px">Templates k&ouml;nnen mehreren Pumpen-Zuweisungen zugeordnet werden. Skip-Regeln setzen komplett aus, Anpassungsregeln verk&uuml;rzen oder verl&auml;ngern die Basislaufzeit.</div>
       <div id="weatherTemplates">{weather_template_rows_html}</div>
       <div id="noWeatherTemplatesMsg" style="display:{noWeatherTemplatesMsg};color:#999;font-style:italic;margin-bottom:8px">
         Noch kein Wetter-Template angelegt. Optional, aber f&uuml;r Wiederverwendung empfohlen.
@@ -484,8 +535,8 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
     </div>
 
     <div class="config-section">
-      <h2 style="color:#1a6b3c">3) Pumpen-Zuweisungen</h2>
-      <div class="hint-text" style="margin-bottom:10px">Hier wird verkn&uuml;pft: <b>Slot</b> + <b>Wetter-Template/kein Template</b> + <b>Pumpe</b>.</div>
+      <h2 style="color:#1a6b3c">3) Pumpen-Zuweisungen <span title="Eine Zuweisung entscheidet, welche Pumpe bei welchem Slot laufen soll und welche Wetterlogik dafür gilt.">ⓘ</span></h2>
+      <div class="hint-text" style="margin-bottom:10px">Hier wird verkn&uuml;pft: <b>Slot</b> + <b>Wetter-Template/kein Template</b> + <b>Pumpe</b>. So kann dieselbe Zeitsteuerung je Pumpe unterschiedlich auf Wetter reagieren.</div>
       <div id="assignRows">{assignment_rows_html}</div>
       <div id="noAssignmentsMsg" style="display:{noAssignmentsMsg};color:#999;font-style:italic;margin-bottom:8px">
         Noch keine Pumpenzuweisung vorhanden.
@@ -588,18 +639,91 @@ function deleteSlot(si){
   if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0)document.getElementById('noSlotsMsg').style.display='block';
   refreshAssignmentSlotOptions();
 }
+// Mapping zu ConfigManager.h:
+// - WeatherRuleActionType: [0]=SKIP, [1]=REDUCE_RUNTIME, [2]=INCREASE_RUNTIME
+// - WeatherRuleMetric: [0]=CURRENT_TEMP, [1]=FORECAST_TEMP_MAX, [2]=CURRENT_RAIN_MM,
+//   [3]=CURRENT_RAIN_PROB, [4]=DAILY_RAIN_MM, [5]=DAILY_RAIN_PROB,
+//   [6]=FORECAST_RAIN_SUM, [7]=FORECAST_RAIN_PROB_MAX
+// - WeatherRuleComparison: [0]=>, [1]=>=, [2]=<, [3]=<=
+// Muss in derselben Reihenfolge wie die C++-Enums in ConfigManager.h bleiben.
+var weatherRuleActionLabels=['Aussetzen','Laufzeit verkürzen','Laufzeit verlängern'];
+var weatherRuleMetricLabels=['Aktuelle Temperatur','Max. Temperatur in Zeitfenster','Aktueller Niederschlag (mm)','Aktuelle Regenwahrscheinlichkeit (%)','Regen heute (mm)','Regenwahrscheinlichkeit heute (%)','Regenmenge im Zeitfenster (mm)','Max. Regenwahrscheinlichkeit im Zeitfenster (%)'];
+var weatherRuleOperatorLabels=['>','>=','<','<='];
+var WEATHER_RULE_SKIP=0, WEATHER_RULE_REDUCE_RUNTIME=1, WEATHER_RULE_INCREASE_RUNTIME=2;
+var WEATHER_METRIC_CURRENT_TEMP=0, WEATHER_METRIC_FORECAST_TEMP_MAX=1, WEATHER_METRIC_CURRENT_RAIN_MM=2, WEATHER_METRIC_CURRENT_RAIN_PROB=3, WEATHER_METRIC_DAILY_RAIN_MM=4, WEATHER_METRIC_DAILY_RAIN_PROB=5, WEATHER_METRIC_FORECAST_RAIN_SUM=6, WEATHER_METRIC_FORECAST_RAIN_PROB_MAX=7;
+function metricUsesWindow(metric){ metric=parseInt(metric||0,10); return metric===WEATHER_METRIC_FORECAST_TEMP_MAX||metric===WEATHER_METRIC_FORECAST_RAIN_SUM||metric===WEATHER_METRIC_FORECAST_RAIN_PROB_MAX; }
+function ruleSummary(d){
+  d=d||{};
+  var metric=parseInt(d.metric!=null?d.metric:WEATHER_METRIC_DAILY_RAIN_MM,10), cmp=parseInt(d.comparison!=null?d.comparison:1,10), action=parseInt(d.actionType!=null?d.actionType:WEATHER_RULE_SKIP,10);
+  var unit=(metric===WEATHER_METRIC_CURRENT_TEMP||metric===WEATHER_METRIC_FORECAST_TEMP_MAX)?'°C':((metric===WEATHER_METRIC_CURRENT_RAIN_MM||metric===WEATHER_METRIC_DAILY_RAIN_MM||metric===WEATHER_METRIC_FORECAST_RAIN_SUM)?' mm':'%');
+  var metricText=weatherRuleMetricLabels[metric]||'Wetterwert';
+  if(metricUsesWindow(metric)) metricText+=' in den nächsten '+(d.windowHours||24)+'h';
+  if(action===WEATHER_RULE_SKIP) return metricText+' '+(weatherRuleOperatorLabels[cmp]||'>=')+' '+(d.threshold!=null?d.threshold:0)+unit+' → Aussetzen';
+  return metricText+' '+(weatherRuleOperatorLabels[cmp]||'>=')+' '+(d.threshold!=null?d.threshold:0)+unit+' → '+(action===WEATHER_RULE_REDUCE_RUNTIME?'-':'+')+(d.effectPercent||25)+'% Laufzeit';
+}
+function onRuleChanged(wi,ri){
+  var row=document.getElementById('wtr'+wi+'_'+ri); if(!row) return;
+  var sm=document.getElementById('wt'+wi+'r'+ri+'Summary'); if(!sm) return;
+  sm.textContent=ruleSummary({
+    actionType: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_action\"]')||{}).value||WEATHER_RULE_SKIP,10),
+    metric: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_metric\"]')||{}).value||WEATHER_METRIC_DAILY_RAIN_MM,10),
+    comparison: parseInt((row.querySelector('select[name=\"wt'+wi+'_r'+ri+'_operator\"]')||{}).value||1,10),
+    threshold: (row.querySelector('input[name=\"wt'+wi+'_r'+ri+'_threshold\"]')||{}).value||0,
+    windowHours: (row.querySelector('input[name=\"wt'+wi+'_r'+ri+'_windowHours\"]')||{}).value||24,
+    effectPercent: (row.querySelector('input[name=\"wt'+wi+'_r'+ri+'_effectPct\"]')||{}).value||25
+  });
+}
+function onRuleActionChange(wi,ri,v){
+  var eff=document.getElementById('wt'+wi+'r'+ri+'EffectRow');
+  if(eff) eff.style.display=(String(v)===String(WEATHER_RULE_SKIP))?'none':'flex';
+  onRuleChanged(wi,ri);
+}
+function onRuleMetricChange(wi,ri,v){
+  var wr=document.getElementById('wt'+wi+'r'+ri+'WindowRow');
+  if(wr) wr.style.display=metricUsesWindow(v)?'flex':'none';
+  onRuleChanged(wi,ri);
+}
+function mkWeatherRule(wi,ri,d){
+  d=d||{};
+  var action=d.actionType!=null?d.actionType:WEATHER_RULE_SKIP, metric=d.metric!=null?d.metric:WEATHER_METRIC_DAILY_RAIN_MM, cmp=d.comparison!=null?d.comparison:1;
+  var threshold=d.threshold!=null?d.threshold:0, effect=d.effectPercent||25, win=d.windowHours||24, enabled=d.enabled!==false?'checked':'';
+  var actOpts='', metOpts='', cmpOpts='';
+  for(var a=0;a<weatherRuleActionLabels.length;a++) actOpts+='<option value=\"'+a+'\"'+(parseInt(action,10)===a?' selected':'')+'>'+weatherRuleActionLabels[a]+'</option>';
+  for(var m=0;m<weatherRuleMetricLabels.length;m++) metOpts+='<option value=\"'+m+'\"'+(parseInt(metric,10)===m?' selected':'')+'>'+weatherRuleMetricLabels[m]+'</option>';
+  for(var o=0;o<weatherRuleOperatorLabels.length;o++) cmpOpts+='<option value=\"'+o+'\"'+(parseInt(cmp,10)===o?' selected':'')+'>'+weatherRuleOperatorLabels[o]+'</option>';
+  return '<div id=\"wtr'+wi+'_'+ri+'\" style=\"border:1px solid #dce8f8;border-radius:6px;padding:10px;margin:8px 0;background:#fff\">'
+    +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px\"><b>Regel '+(ri+1)+'</b><button type=\"button\" onclick=\"deleteWeatherRule('+wi+','+ri+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; Entfernen</button></div>'
+    +'<div class=\"hint-text\" id=\"wt'+wi+'r'+ri+'Summary\" style=\"margin-bottom:8px\">'+ruleSummary({actionType:action,metric:metric,comparison:cmp,threshold:threshold,windowHours:win,effectPercent:effect})+'</div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Aktive Regeln werden ausgewertet, deaktivierte Regeln bleiben gespeichert.\"><input type=\"checkbox\" name=\"wt'+wi+'_r'+ri+'_enabled\" '+enabled+' onchange=\"onRuleChanged('+wi+','+ri+')\"> Aktiv</label></div><div class=\"form-col\"><label title=\"Aussetzen stoppt die Pumpe komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt'+wi+'_r'+ri+'_action\" onchange=\"onRuleActionChange('+wi+','+ri+',this.value)\">'+actOpts+'</select></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Der Wetterwert wird mit dem Schwellwert verglichen. Für Zeitfenster-Regeln werden die nächsten Stunden betrachtet.\">Wetterwert</label><select name=\"wt'+wi+'_r'+ri+'_metric\" onchange=\"onRuleMetricChange('+wi+','+ri+',this.value)\">'+metOpts+'</select></div><div class=\"form-col\"><label title=\"Vergleicht Wetterwert und Schwellwert. Beispiel: > 30.\">Vergleich</label><select name=\"wt'+wi+'_r'+ri+'_operator\" onchange=\"onRuleChanged('+wi+','+ri+')\">'+cmpOpts+'</select></div><div class=\"form-col\"><label title=\"Ab diesem Wert greift die Regel.\">Schwellwert</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_threshold\" value=\"'+threshold+'\" step=\"0.1\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div>'
+    +'<div id=\"wt'+wi+'r'+ri+'WindowRow\" class=\"form-row\" style=\"display:'+(metricUsesWindow(metric)?'flex':'none')+'\"><div class=\"form-col\"><label title=\"Nur für Zeitfenster-Regeln: wie viele nächste Stunden ausgewertet werden.\">Zeitfenster (h)</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_windowHours\" value=\"'+win+'\" min=\"1\" max=\"48\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div>'
+    +'<div id=\"wt'+wi+'r'+ri+'EffectRow\" class=\"form-row\" style=\"display:'+(parseInt(action,10)===WEATHER_RULE_SKIP?'none':'flex')+'\"><div class=\"form-col\"><label title=\"Positive Prozentwerte beziehen sich immer auf die Basislaufzeit der Zuweisung.\">Effekt (%)</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_effectPct\" value=\"'+effect+'\" min=\"1\" max=\"200\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div></div>';
+}
+function addWeatherRule(wi,d){
+  var wrap=document.getElementById('wt'+wi); if(!wrap) return;
+  var next=parseInt(wrap.getAttribute('data-next-rule')||'0',10);
+  wrap.setAttribute('data-next-rule', String(next+1));
+  var list=document.getElementById('wtRules'+wi); if(list) list.insertAdjacentHTML('beforeend', mkWeatherRule(wi,next,d||{}));
+  var cnt=document.getElementById('wt'+wi+'RuleCount'); if(cnt) cnt.value=String(next+1);
+  var msg=document.getElementById('wt'+wi+'NoRulesMsg'); if(msg) msg.style.display='none';
+}
+function deleteWeatherRule(wi,ri){
+  var el=document.getElementById('wtr'+wi+'_'+ri); if(el) el.remove();
+  var list=document.getElementById('wtRules'+wi), msg=document.getElementById('wt'+wi+'NoRulesMsg');
+  if(list&&msg&&list.children.length===0) msg.style.display='block';
+}
 function mkWeatherTemplate(wi,d){
-  d=d||{}; var nm=d.name||('Wetter '+(wi+1));
-  var skipRainMm=d.skipIfRainMm!=null?d.skipIfRainMm:0;
-  var skipRainPct=d.skipIfRainPct!=null?d.skipIfRainPct:0;
-  var aboveTemp=d.runOnlyAboveTemp!=null?d.runOnlyAboveTemp:-99;
-  var reduceRainMm=d.reduceIfRainMm!=null?d.reduceIfRainMm:0;
-  var reducePct=d.reducePct||50;
-  return '<div class=\"pump-entry\" id=\"wt'+wi+'\" style=\"border:1px solid #cfe0f6;padding:12px;margin-bottom:12px;border-radius:6px;background:#f7fbff\">'
+  d=d||{}; var nm=d.name||('Wetter '+(wi+1)); var rules=d.rules||[];
+  var html='<div class=\"pump-entry\" id=\"wt'+wi+'\" data-next-rule=\"'+rules.length+'\" style=\"border:1px solid #cfe0f6;padding:12px;margin-bottom:12px;border-radius:6px;background:#f7fbff\">'
     +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\"><b style=\"font-size:1.05em\">🌦️ '+nm+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editWeatherTemplate('+wi+')\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteWeatherTemplate('+wi+')\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"wt'+wi+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateWeatherTemplateHeading('+wi+',this)\" required></div></div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"wt'+wi+'_skipRainMm\" value=\"'+skipRainMm+'\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"wt'+wi+'_skipRainPct\" value=\"'+skipRainPct+'\" min=\"0\" max=\"100\"></div></div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"wt'+wi+'_aboveTemp\" value=\"'+aboveTemp+'\" min=\"-99\" max=\"60\" step=\"0.5\"></div><div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"wt'+wi+'_reduceRainMm\" value=\"'+reduceRainMm+'\" min=\"0\" max=\"100\" step=\"0.1\"></div><div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"wt'+wi+'_reducePct\" value=\"'+reducePct+'\" min=\"1\" max=\"99\"></div></div></div>';
+    +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Ein Wetter-Template ist eine wiederverwendbare Sammlung aus mehreren Wetterregeln.\">Name</label><input type=\"text\" name=\"wt'+wi+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateWeatherTemplateHeading('+wi+',this)\" required></div></div>'
+    +'<div class=\"hint-text\" style=\"margin-bottom:8px\">Ein Template kann mehrere Regeln enthalten. Reihenfolge im System: erst <b>Aussetzen</b>, danach <b>Verkürzen/Verlängern</b>. Zuschläge und Abzüge beziehen sich immer auf die Basislaufzeit der Zuweisung.</div>'
+    +'<input type=\"hidden\" name=\"wt'+wi+'_ruleCount\" id=\"wt'+wi+'RuleCount\" value=\"'+rules.length+'\">'
+    +'<div id=\"wtRules'+wi+'\">';
+  for(var i=0;i<rules.length;i++) html+=mkWeatherRule(wi,i,rules[i]);
+  html+='</div><div id=\"wt'+wi+'NoRulesMsg\" class=\"hint-text\" style=\"display:'+(rules.length?'none':'block')+';margin:8px 0\">Noch keine Wetterregel definiert.</div>'
+    +'<button type=\"button\" class=\"btn\" onclick=\"addWeatherRule('+wi+')\" style=\"background:#5c88c8;padding:7px 14px;font-size:13px\">+ Regel hinzuf&#252;gen</button></div>';
+  return html;
 }
 function addWeatherTemplate(){
   var wi=_nextWeatherTemplateIdx++;
@@ -625,10 +749,10 @@ function addAssignment(){
   var html='<div class=\"pump-entry\" style=\"border:1px solid #eadfb7;padding:12px;margin-bottom:12px;border-radius:6px;background:#fffdf5\" id=\"asrow'+ai+'\">'
     +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\"><b style=\"font-size:1.05em\">🔗 Zuweisung '+(ai+1)+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editAssignment('+ai+')\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteAssignment('+ai+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
     +'<div class=\"form-row\">'
-    +'<div class=\"form-col\"><label>Slot</label><select name=\"as'+ai+'_slot\">'+slotOpts(0)+'</select></div>'
-    +'<div class=\"form-col\"><label>Pumpe</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
-    +'<div class=\"form-col\"><label>Wetter-Template</label><select name=\"as'+ai+'_weatherTemplate\">'+weatherTemplateOpts(-1)+'</select></div>'
-    +'<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as'+ai+'_duration\" value=\"60\" min=\"1\" max=\"7200\"></div>'
+    +'<div class=\"form-col\"><label title=\"Ein Slot beschreibt nur, wann geprüft wird. Er enthält keine pumpenspezifische Wetterlogik.\">Slot</label><select name=\"as'+ai+'_slot\">'+slotOpts(0)+'</select></div>'
+    +'<div class=\"form-col\"><label title=\"Die konkrete Pumpe, die bei dieser Zuweisung laufen soll.\">Pumpe</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
+    +'<div class=\"form-col\"><label title=\"Hier wird festgelegt, welche Wetterregeln für genau diese Pumpe und diesen Slot gelten. Kein Template = reine Zeitsteuerung.\">Wetter-Template</label><select name=\"as'+ai+'_weatherTemplate\">'+weatherTemplateOpts(-1)+'</select></div>'
+    +'<div class=\"form-col\"><label title=\"Basislaufzeit ohne Wetteranpassung. Zuschläge und Abzüge der Regeln beziehen sich auf diesen Wert.\">Dauer (s)</label><input type=\"number\" name=\"as'+ai+'_duration\" value=\"60\" min=\"1\" max=\"7200\"></div>'
     +'</div></div>';
   document.getElementById('assignRows').insertAdjacentHTML('beforeend',html);
   document.getElementById('assignCount').value=_nextAssignIdx;
@@ -652,12 +776,12 @@ function mkSlot(si,d){
   var offDisp=(tr===4)?'flex':'none';
   return '<div class=\"pump-entry\" id=\"slot'+si+'\" style=\"border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9\">'
     +'<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px\"><b style=\"font-size:1.05em\">&#128337; '+si1+' &ndash; '+nm+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editSlot('+si+')\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteSlot('+si+')\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
-    +'<div id=\"slotBody'+si+'\" style=\"display:block\"><div class=\"form-row\"><div class=\"form-col\"><label><input type=\"checkbox\" name=\"s'+si+'_enabled\" '+en+'> Aktiv</label></div><div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"s'+si+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateSlotHeading('+si+',this)\" required></div></div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label>Ausl&ouml;ser</label><select name=\"s'+si+'_trigger\" onchange=\"onTriggerChange('+si+',this.value)\">'+trOpts+'</select></div><div class=\"form-col\"><label>Uhrzeit / Fallback</label><input type=\"time\" name=\"s'+si+'_time\" value=\"'+timVal+'\"></div></div>'
-    +'<div id=\"offsetRow'+si+'\" style=\"display:'+offDisp+'\" class=\"form-row\"><div class=\"form-col\"><label>Offset-Basis</label><select name=\"s'+si+'_offsetBase\">'+baseOpts+'</select></div><div class=\"form-col\"><label>Offset (Min., negativ = davor, positiv = danach)</label><input type=\"number\" name=\"s'+si+'_offsetMin\" value=\"'+offMin+'\" min=\"-720\" max=\"720\"></div></div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label>Wiederholung</label><select name=\"s'+si+'_repeatMode\" onchange=\"onRepeatModeChange('+si+',this.value)\">'+repOpts+'</select></div></div>'
+    +'<div id=\"slotBody'+si+'\" style=\"display:block\"><div class=\"form-row\"><div class=\"form-col\"><label title=\"Nur aktive Slots werden geprüft.\"><input type=\"checkbox\" name=\"s'+si+'_enabled\" '+en+'> Aktiv</label></div><div class=\"form-col\"><label title=\"Ein Slot ist ein reiner Zeit-Auslöser. Wetterlogik gehört in die Zuweisung über ein Wetter-Template.\">Name</label><input type=\"text\" name=\"s'+si+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateSlotHeading('+si+',this)\" required></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Legt fest, worauf sich der Slot zeitlich bezieht: feste Uhrzeit, Sonnenaufgang, Sonnenuntergang oder Offset relativ dazu.\">Ausl&ouml;ser</label><select name=\"s'+si+'_trigger\" onchange=\"onTriggerChange('+si+',this.value)\">'+trOpts+'</select></div><div class=\"form-col\"><label title=\"Diese Uhrzeit wird bei festen Slots direkt verwendet und dient bei astronomischen Triggern als Fallback, falls keine Wetter-/Astronomiedaten vorliegen.\">Uhrzeit / Fallback</label><input type=\"time\" name=\"s'+si+'_time\" value=\"'+timVal+'\"></div></div>'
+    +'<div id=\"offsetRow'+si+'\" style=\"display:'+offDisp+'\" class=\"form-row\"><div class=\"form-col\"><label title=\"Relativ bedeutet: Der Start wird von Sonnenaufgang, Sonnenuntergang oder Mittagszeit aus berechnet.\">Offset-Basis</label><select name=\"s'+si+'_offsetBase\">'+baseOpts+'</select></div><div class=\"form-col\"><label title=\"Negativ = davor, positiv = danach. Beispiel: -30 bedeutet 30 Minuten vor der gewählten Basis.\">Offset (Min., negativ = davor, positiv = danach)</label><input type=\"number\" name=\"s'+si+'_offsetMin\" value=\"'+offMin+'\" min=\"-720\" max=\"720\"></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Wochentage = feste Tage. Intervall = alle N Tage ab dem Ankerdatum.\">Wiederholung</label><select name=\"s'+si+'_repeatMode\" onchange=\"onRepeatModeChange('+si+',this.value)\">'+repOpts+'</select></div></div>'
     +'<div id=\"daysRow'+si+'\" style=\"display:'+(repeatMode===1?'none':'block')+';margin-top:6px\">'+daysHtml+'</div>'
-     +'<div id=\"intervalRow'+si+'\" style=\"display:'+(repeatMode===1?'flex':'none')+'\" class=\"form-row\"><div class=\"form-col\"><label>Alle N Tage</label><input type=\"number\" name=\"s'+si+'_intervalDays\" value=\"'+intervalDays+'\" min=\"1\" max=\"90\"></div><div class=\"form-col\"><label>Startdatum (Anker)</label><input type=\"date\" name=\"s'+si+'_intervalAnchor\" value=\"'+intervalAnchor+'\"></div></div>'
+     +'<div id=\"intervalRow'+si+'\" style=\"display:'+(repeatMode===1?'flex':'none')+'\" class=\"form-row\"><div class=\"form-col\"><label title=\"Beispiel: 3 bedeutet alle drei Tage.\">Alle N Tage</label><input type=\"number\" name=\"s'+si+'_intervalDays\" value=\"'+intervalDays+'\" min=\"1\" max=\"90\"></div><div class=\"form-col\"><label title=\"Ab diesem Datum wird das Intervall gezählt.\">Startdatum (Anker)</label><input type=\"date\" name=\"s'+si+'_intervalAnchor\" value=\"'+intervalAnchor+'\"></div></div>'
      +'</div></div>';
 }
 function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('weatherTemplateCount').value=_nextWeatherTemplateIdx; document.getElementById('assignCount').value=_nextAssignIdx; }
@@ -671,7 +795,8 @@ const char HTML_WATERING_TEST_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#129514; Bew&#228;sserung testen / simulieren</h1>
   <div class="alert-info">
-    Nutzt exakt die gleiche Entscheidungs-Engine wie der Livebetrieb, aber ohne Hardware-Ausgabe.
+    Nutzt exakt die gleiche Entscheidungs-Engine wie der Livebetrieb, aber ohne Hardware-Ausgabe.<br>
+    Wetterregeln werden in derselben Reihenfolge wie live ausgewertet: erst Aussetzen, dann Laufzeit anpassen.
   </div>
   <div class="form-row">
     <div class="form-col"><label>Slot</label><select id="slotIndex"></select></div>
@@ -713,6 +838,9 @@ function hhmmFromTs(ts){
   if(!ts) return '–';
   var d=new Date(ts*1000); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
 }
+function actionLabelDe(a){
+  return a==='skip'?'aussetzen':(a==='reduce'?'verkürzen':(a==='extend'?'verlängern':(a==='fallback'?'Fallback':'ausführen')));
+}
 function renderWeatherContext(d){
   var el=document.getElementById('simWeatherContext');
   if(!el) return;
@@ -742,10 +870,10 @@ function runSim(){
   fetch('/api/watering_simulate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})
   .then(function(r){return r.json();})
   .then(function(d){
-    var color=(d.action==='skip')?'#dc3545':(d.action==='reduce'?'#d48a00':'#1a6b3c');
+    var color=(d.action==='skip')?'#dc3545':(d.action==='reduce'?'#d48a00':(d.action==='extend'?'#0b7285':'#1a6b3c'));
     var h='<h2 style=\"margin-bottom:6px\">Ergebnis</h2>'
       +'<div style=\"padding:10px;border:1px solid #ddd;border-radius:6px;background:#fafafa\">'
-      +'<p><b>Status:</b> <span style=\"color:'+color+'\">'+esc(d.action)+'</span></p>'
+      +'<p><b>Status:</b> <span style=\"color:'+color+'\">'+esc(actionLabelDe(d.action))+'</span></p>'
       +'<p><b>Grund:</b> '+esc(d.reason)+'</p>'
       +'<p><b>Trigger:</b> '+esc(d.triggerSource||'–')+'</p>'
       +'<p><b>Sonnenaufgang/Sonnenuntergang:</b> '+esc(d.sunrise||'–')+' / '+esc(d.sunset||'–')+'</p>'
@@ -754,8 +882,8 @@ function runSim(){
       +'<p><b>Triggerzeit:</b> '+esc(d.triggerTime||'–')+' | <b>Tag passt:</b> '+(d.dayMatched?'ja':'nein')+' | <b>Minute passt:</b> '+(d.triggerMatched?'ja':'nein')+'</p>'
       +'<p><b>Gesamtdauer:</b> '+esc(d.totalDurationSec||0)+' s</p>';
     if(d.plan && d.plan.length){
-      h+='<table><tr><th>#</th><th>Pumpe</th><th>Aktion</th><th>Laufzeit</th><th>Basis</th><th>Grund</th></tr>';
-      d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(p.action)+'</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td><td>'+esc(p.reason||'')+' ('+esc(p.policySource||'')+')</td></tr>'; });
+      h+='<table><tr><th>#</th><th>Pumpe</th><th>Aktion</th><th>Laufzeit</th><th>Basis</th><th>Regeln</th><th>Grund</th></tr>';
+      d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(actionLabelDe(p.action))+'</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td><td>'+esc(p.appliedRules||'–')+'</td><td>'+esc(p.reason||'')+' ('+esc(p.policySource||'')+')</td></tr>'; });
       h+='</table>';
     } else {
       h+='<p style=\"color:#999\">Keine Pumpen-Ausf&#252;hrung geplant.</p>';
@@ -822,5 +950,101 @@ const char HTML_SAVED_LIVE[] PROGMEM = R"rawhtml(
   <p>Konfiguration gespeichert und sofort angewendet.</p>
   <a class="btn" href="{saved_back_url}" style="margin-top:12px">&#8592; Zur&#252;ck</a>
   <a class="btn" href="/status" style="margin-top:12px;margin-left:8px">Zum Status</a>
+</div>
+)rawhtml";
+
+// ─── Run Log Page ─────────────────────────────────────────────────────────────
+
+const char HTML_RUNLOG_PAGE[] PROGMEM = R"rawhtml(
+<div class="card">
+  <h1>&#128203; Bew&#228;sserungs-Protokoll</h1>
+  <p class="hint-text" style="margin-bottom:12px">
+    Zeigt die letzten Pumpen-Aktivierungen (neueste zuerst, max. 500 Eintr&#228;ge, rotierend).
+  </p>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn" onclick="loadLog()">&#8635; Aktualisieren</button>
+    <button class="btn btn-danger" onclick="clearLog()">&#128465; Protokoll l&ouml;schen</button>
+  </div>
+  <div id="logMsg" style="color:#dc3545;font-size:13px;min-height:18px;margin-bottom:8px"></div>
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead><tr><th>Datum / Uhrzeit</th><th>Slot</th><th>Pumpe</th><th>Dauer</th></tr></thead>
+      <tbody id="logBody"><tr><td colspan="4" style="color:#999">Lade...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<script>
+function esc(s){var d=document.createElement('div');d.appendChild(document.createTextNode(s||''));return d.innerHTML;}
+function fmtTs(t){
+  if(!t)return '–';
+  var d=new Date(t*1000);
+  var pad=function(n){return n<10?'0'+n:n;};
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())
+    +' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+async function loadLog(){
+  var tbody=document.getElementById('logBody');
+  tbody.innerHTML='<tr><td colspan="4" style="color:#999">Lade...</td></tr>';
+  try{
+    var r=await fetch('/api/runlog');
+    if(!r.ok){tbody.innerHTML='<tr><td colspan="4" style="color:#dc3545">Fehler '+r.status+'</td></tr>';return;}
+    var arr=await r.json();
+    if(!arr||arr.length===0){tbody.innerHTML='<tr><td colspan="4" style="color:#999">Keine Eintr&auml;ge.</td></tr>';return;}
+    var html='';
+    arr.forEach(function(e){
+      html+='<tr>'
+        +'<td>'+esc(fmtTs(e.t))+'</td>'
+        +'<td>'+esc(e.sn||'–')+'</td>'
+        +'<td>'+esc(e.pn||'–')+'</td>'
+        +'<td>'+esc(e.dur!=null?e.dur+' s':'–')+'</td>'
+        +'</tr>';
+    });
+    tbody.innerHTML=html;
+  }catch(ex){tbody.innerHTML='<tr><td colspan="4" style="color:#dc3545">'+esc(ex.toString())+'</td></tr>';}
+}
+async function clearLog(){
+  if(!confirm('Protokoll wirklich l\u00f6schen?'))return;
+  var r=await fetch('/api/runlog/clear',{method:'POST'});
+  if(r.ok){document.getElementById('logMsg').innerText='';loadLog();}
+  else document.getElementById('logMsg').innerText='Fehler beim L\u00f6schen.';
+}
+loadLog();
+</script>
+)rawhtml";
+
+// ─── Backup & Restore Page ────────────────────────────────────────────────────
+// Token: {restore_msg}  – filled server-side with success / error message
+
+const char HTML_BACKUP_PAGE[] PROGMEM = R"rawhtml(
+<div class="card">
+  <h1>&#128190; Backup &amp; Restore</h1>
+  {restore_msg}
+  <div class="config-section">
+    <h2>&#8595; Backup herunterladen</h2>
+    <p class="hint-text" style="margin-bottom:12px">
+      L&#228;dt eine einzige JSON-Datei herunter, die alle Konfigurationen enth&#228;lt
+      (WLAN, Zeit, Standort, Hardware, Bew&#228;sserungsplan).
+    </p>
+    <a class="btn" href="/api/backup">&#8595; Backup jetzt herunterladen</a>
+  </div>
+  <div class="config-section">
+    <h2>&#8593; Konfiguration wiederherstellen</h2>
+    <p class="hint-text" style="margin-bottom:12px">
+      W&#228;hlen Sie eine zuvor heruntergeladene Backup-Datei. Nach dem Hochladen wird die
+      Konfiguration wiederhergestellt und das Ger&#228;t neu gestartet.
+    </p>
+    <form action="/api/restore" method="POST" enctype="multipart/form-data">
+      <input type="file" name="backup" accept=".json" required
+             style="margin-bottom:10px;display:block">
+      <button type="submit" class="btn">&#8593; Restore starten</button>
+    </form>
+  </div>
+  <div class="config-section">
+    <h2>&#128193; Dateiverwaltung</h2>
+    <p class="hint-text" style="margin-bottom:12px">
+      Direkter Zugriff auf das LittleFS-Dateisystem f&#252;r erweiterte Verwaltungsaufgaben.
+    </p>
+    <a class="btn" href="/fs">Dateiverwaltung &#246;ffnen</a>
+  </div>
 </div>
 )rawhtml";

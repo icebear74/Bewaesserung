@@ -1,7 +1,24 @@
 #include "WateringScheduler.h"
 #include <time.h>
 
-WateringScheduler::WateringScheduler() {}
+WateringScheduler::WateringScheduler() {
+    // Allocate the decision result buffer in PSRAM to keep the ~14 KB struct
+    // off the loopTask stack (default 8 KB).
+    _decisionBuf = static_cast<WateringDecisionResult*>(
+        heap_caps_calloc(1, sizeof(WateringDecisionResult), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!_decisionBuf) {
+        // Fallback to internal heap if PSRAM is unavailable
+        _decisionBuf = static_cast<WateringDecisionResult*>(calloc(1, sizeof(WateringDecisionResult)));
+    }
+    if (!_decisionBuf) {
+        Serial.println("[Sched] FATAL: failed to allocate decision buffer.");
+    }
+}
+
+WateringScheduler::~WateringScheduler() {
+    free(_decisionBuf);
+    _decisionBuf = nullptr;
+}
 
 void WateringScheduler::begin(ConfigManager* cfg, RelayManager* rm, WeatherManager* wm) {
     _cfg = cfg;
@@ -60,6 +77,16 @@ void WateringScheduler::update() {
                 _pumpOffAt   = millis() + (unsigned long)item.durationSec * 1000UL;
                 Serial.printf("[Sched] Pump %d ON for %ds (slot %d).\n",
                               item.pumpIndex, item.durationSec, item.slotIndex);
+                // Log the activation to the rotating run log
+                if (_runLog) {
+                    SlotConfig&    sc = _cfg->getSlotConfig();
+                    HardwareConfig& hw = _cfg->getHardwareConfig();
+                    const char* slotName = (item.slotIndex < sc.slotCount)
+                                          ? sc.slots[item.slotIndex].name : "?";
+                    const char* pumpName = (item.pumpIndex < hw.relayCount)
+                                          ? hw.pumps[item.pumpIndex].name : "?";
+                    _runLog->append(time(nullptr), slotName, pumpName, item.durationSec);
+                }
             } else {
                 Serial.printf("[Sched] Pump %d could not be activated – skipped.\n",
                               item.pumpIndex);
@@ -119,15 +146,16 @@ void WateringScheduler::update() {
         in.enforceDayMatch = true;
         in.enforceTriggerMinute = true;
 
-        WateringDecisionResult decision = WateringDecisionEngine::evaluateSlot(in);
-        if (decision.action == WATER_ACTION_SKIP) {
-            if (decision.triggerMatched) {
+        if (!_decisionBuf) continue;
+        WateringDecisionEngine::evaluateSlot(in, *_decisionBuf);
+        if (_decisionBuf->action == WATER_ACTION_SKIP) {
+            if (_decisionBuf->triggerMatched) {
                 Serial.printf("[Sched] Slot '%s' skipped: %s\n",
-                              sc.slots[si].name, decision.reason);
+                              sc.slots[si].name, _decisionBuf->reason);
             }
             continue;
         }
-        enqueueDecision(decision);
+        enqueueDecision(*_decisionBuf);
     }
 }
 

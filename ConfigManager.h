@@ -14,10 +14,16 @@
 #define EXPANDER_TYPE_PCF8574 0   // PCF8574: 8 ports  (addresses 0x20–0x27)
 #define EXPANDER_TYPE_PCF8575 1   // PCF8575: 16 ports (addresses 0x20–0x27)
 
+// Display mode: which status display(s) are active
+#define DISPLAY_OLED  0   // SSD1306 I2C OLED only (default, backward-compatible)
+#define DISPLAY_TFT   1   // ST7735 SPI colour TFT only
+#define DISPLAY_BOTH  2   // SSD1306 + ST7735 simultaneously
+
 struct DeviceConfig {
     char hostname[32]    = "Bewaesserung";
     char ssid[64]        = "";
     char password[64]    = "";
+    char otaPassword[64] = "";
     char timezone[64]    = "CET-1CEST,M3.5.0,M10.5.0/3";
     char ntpServer[64]   = "pool.ntp.org";
     float latitude       = 48.1351;
@@ -52,6 +58,16 @@ struct HardwareConfig {
     int           expanderCount = 0;
     ExpanderEntry expanders[MAX_EXPANDER_COUNT];
     bool          relayInverted = false;  // legacy global invert flag (kept for backward compat)
+
+    // ── Display configuration ─────────────────────────────────────────────────
+    // displayMode: DISPLAY_OLED (0) / DISPLAY_TFT (1) / DISPLAY_BOTH (2)
+    // Default 0 keeps existing behaviour for boards without a TFT wired.
+    uint8_t displayMode = DISPLAY_OLED;
+
+    // ST7735 SPI pin mapping (only used when displayMode != DISPLAY_OLED)
+    int tftCsPin  = 44;   // Chip-Select  (TFT_CS)
+    int tftRstPin = 43;   // Reset        (TFT_RST, -1 = tied to Arduino RESET)
+    int tftDcPin  = 4;    // Data/Command (TFT_DC)
 };
 
 // ─── Watering Slot / Trigger model ───────────────────────────────────────────
@@ -70,6 +86,7 @@ struct HardwareConfig {
 
 #define MAX_SLOTS           16
 #define MAX_WEATHER_TEMPLATES 16
+#define MAX_WEATHER_RULES_PER_TEMPLATE 8
 #define MAX_SLOT_ASSIGNMENTS 32
 
 // Repeat mode
@@ -107,9 +124,45 @@ struct WeatherPolicy {
     uint8_t reducePct        = 50;     // 1..99
 };
 
+enum WeatherRuleActionType : uint8_t {
+    WEATHER_RULE_SKIP = 0,
+    WEATHER_RULE_REDUCE_RUNTIME,
+    WEATHER_RULE_INCREASE_RUNTIME
+};
+
+enum WeatherRuleMetric : uint8_t {
+    WEATHER_METRIC_CURRENT_TEMP = 0,
+    WEATHER_METRIC_FORECAST_TEMP_MAX,
+    WEATHER_METRIC_CURRENT_RAIN_MM,
+    WEATHER_METRIC_CURRENT_RAIN_PROB,
+    WEATHER_METRIC_DAILY_RAIN_MM,
+    WEATHER_METRIC_DAILY_RAIN_PROB,
+    WEATHER_METRIC_FORECAST_RAIN_SUM,
+    WEATHER_METRIC_FORECAST_RAIN_PROB_MAX
+};
+
+enum WeatherRuleComparison : uint8_t {
+    WEATHER_OP_GT = 0,
+    WEATHER_OP_GTE,
+    WEATHER_OP_LT,
+    WEATHER_OP_LTE
+};
+
+struct WeatherRule {
+    bool    enabled       = true;
+    uint8_t actionType    = WEATHER_RULE_SKIP;
+    uint8_t metric        = WEATHER_METRIC_DAILY_RAIN_MM;
+    uint8_t comparison    = WEATHER_OP_GTE;
+    float   threshold     = 0.0f;
+    uint8_t effectPercent = 25;    // only used for increase/reduce rules
+    uint8_t windowHours   = 24;    // only used for forecast-based metrics
+};
+
 struct WeatherTemplate {
     char          name[32] = "";
-    WeatherPolicy weather;
+    uint8_t       ruleCount = 0;
+    WeatherRule   rules[MAX_WEATHER_RULES_PER_TEMPLATE];
+    WeatherPolicy weather; // legacy import fields; migrated into rules on load
 };
 
 // Assignment: one pump runs for a given duration when a slot fires

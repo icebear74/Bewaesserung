@@ -8,6 +8,7 @@ enum WateringDecisionAction : uint8_t {
     WATER_ACTION_SKIP = 0,
     WATER_ACTION_EXECUTE,
     WATER_ACTION_REDUCE,
+    WATER_ACTION_EXTEND,
     WATER_ACTION_FALLBACK
 };
 
@@ -16,9 +17,11 @@ struct WateringDecisionPumpPlan {
     uint8_t pumpIndex       = 0;
     int     baseDurationSec = 0;
     int     durationSec     = 0;
+    int     adjustmentPercent = 0;
     WateringDecisionAction action = WATER_ACTION_SKIP;
-    char    reason[120] = {0};
-    char    policySource[32] = {0};
+    char    reason[160] = {0};
+    char    policySource[48] = {0};
+    char    appliedRules[192] = {0};
 };
 
 struct WateringDecisionInput {
@@ -58,5 +61,7 @@ public:
                                      bool weatherAvailable,
                                      bool* usedFallbackTime);
 
-    static WateringDecisionResult evaluateSlot(const WateringDecisionInput& input);
+    // Writes the decision into caller-supplied storage (avoids a ~14 KB stack
+    // allocation – callers should allocate WateringDecisionResult in PSRAM).
+    static void evaluateSlot(const WateringDecisionInput& input, WateringDecisionResult& out);
 };

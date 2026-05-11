@@ -11,9 +11,13 @@
 #include "WeatherManager.h"
 #include "WateringScheduler.h"
 #include "WateringDecisionEngine.h"
+#include "WateringRunLog.h"
+#include "FileManager.h"
 #include <WebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
+#include <LittleFS.h>
 #include <math.h>
 #include <time.h>
 
@@ -22,6 +26,20 @@
 static WebServerManager* g_wsm    = nullptr;
 static Application*      g_app    = nullptr;
 static WebServer*         g_server = nullptr;
+
+// ─── PSRAM allocator (shared by backup / runlog handlers) ────────────────────
+
+struct WhPsramAllocator : ArduinoJson::Allocator {
+    void* allocate(size_t size) override {
+        void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return p ? p : malloc(size);
+    }
+    void deallocate(void* pointer) override { free(pointer); }
+    void* reallocate(void* ptr, size_t new_size) override {
+        void* p = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return p ? p : realloc(ptr, new_size);
+    }
+};
 
 // ─── Utility: string replace ──────────────────────────────────────────────────
 
@@ -68,6 +86,8 @@ static int daysFromCivil(int y, unsigned m, unsigned d) {
 }
 
 static const int MAX_NEXT_SEARCH_DAYS = 90;
+static const int RULE_INDEX_SAFETY_MULTIPLIER = 4; // sparse UI deletes can leave holes in submitted indices
+static const int MAX_SUBMITTED_RULE_INDICES = MAX_WEATHER_RULES_PER_TEMPLATE * RULE_INDEX_SAFETY_MULTIPLIER;
 
 // ─── Common warning fragments ─────────────────────────────────────────────────
 
@@ -105,6 +125,7 @@ static String formatDateTimeLocal(time_t ts);
 static String getSlotLabel(const WateringSlot& slot, int idx);
 static String getPumpLabel(const HardwareConfig& hw, int idx);
 static const char* actionToText(WateringDecisionAction action);
+static const char* actionToLabelDe(WateringDecisionAction action);
 
 struct NextSlotDecisionInfo {
     bool found = false;
@@ -121,6 +142,15 @@ static bool findNextSlotDecision(int slotIndex,
                                  bool weatherAvailable,
                                  bool weatherStale,
                                  NextSlotDecisionInfo& out);
+
+// Forward declarations for handlers defined later in this file
+static void handleRunLog();
+static void handleApiRunLog();
+static void handleApiRunLogClear();
+static void handleBackupPage();
+static void handleApiBackup();
+static void handleRestoreBegin();
+static void handleRestoreUploadChunk();
 
 // ─── Register ─────────────────────────────────────────────────────────────────
 
@@ -146,6 +176,16 @@ void registerHandlers(WebServerManager* wsm, Application* app) {
     g_server->on("/api/weather",     HTTP_GET,  handleApiWeather);
     g_server->on("/api/watering_simulate", HTTP_POST, handleApiWateringSimulate);
     g_server->on("/api/watering_status", HTTP_GET, handleApiWateringStatus);
+    // Run log
+    g_server->on("/runlog",          HTTP_GET,  handleRunLog);
+    g_server->on("/api/runlog",      HTTP_GET,  handleApiRunLog);
+    g_server->on("/api/runlog/clear", HTTP_POST, handleApiRunLogClear);
+    // Backup / Restore
+    g_server->on("/backup",          HTTP_GET,  handleBackupPage);
+    g_server->on("/api/backup",      HTTP_GET,  handleApiBackup);
+    g_server->on("/api/restore",     HTTP_POST, handleRestoreBegin, handleRestoreUploadChunk);
+    // File manager (/fs and sub-routes)
+    setupFileManagerRoutes(g_server);
     g_server->onNotFound(handleNotFound);
 
     Serial.println("[Web] Routes registered.");
@@ -240,6 +280,13 @@ static void handleStatus() {
     if (hw.relayCount > 0) {
         pumpHtml += "<h2 style='margin-top:4px;color:#1a6b3c'>💧 Pumpen (Live-Entscheidung)</h2>";
         pumpHtml += "<div class='table-wrap'><table class='compact-table'><tr><th>Pumpe</th><th>Status</th><th>Nächster Lauf</th><th>Entscheidung</th><th>Grund</th><th>Letzter Start/Stop</th></tr>";
+
+        // Allocate NextSlotDecisionInfo (~14 KB) in PSRAM once and reuse it
+        // across both loops to avoid overflowing the 8 KB loopTask stack.
+        NextSlotDecisionInfo* nextInfo = static_cast<NextSlotDecisionInfo*>(
+            heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!nextInfo) nextInfo = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
+
         for (int i = 0; i < hw.relayCount; i++) {
             RelayManager::PumpRuntimeInfo rt;
             bool haveRt = rm && rm->getPumpRuntimeInfo(i, rt);
@@ -253,17 +300,18 @@ static void handleStatus() {
             String bestSlot = "–";
             WateringDecisionPumpPlan bestPlan;
             String bestWarnings = "";
-            for (int si = 0; si < sc.slotCount; si++) {
-                NextSlotDecisionInfo next;
-                if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next)) continue;
-                WateringDecisionPumpPlan pp;
-                if (!findPlanForPump(next.result, i, pp)) continue;
-                if (!foundNext || next.triggerTime < bestTs) {
-                    foundNext = true;
-                    bestTs = next.triggerTime;
-                    bestSlot = getSlotLabel(sc.slots[si], si);
-                    bestPlan = pp;
-                    bestWarnings = next.result.warnings;
+            if (nextInfo) {
+                for (int si = 0; si < sc.slotCount; si++) {
+                    if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo)) continue;
+                    WateringDecisionPumpPlan pp;
+                    if (!findPlanForPump(nextInfo->result, i, pp)) continue;
+                    if (!foundNext || nextInfo->triggerTime < bestTs) {
+                        foundNext = true;
+                        bestTs = nextInfo->triggerTime;
+                        bestSlot = getSlotLabel(sc.slots[si], si);
+                        bestPlan = pp;
+                        bestWarnings = nextInfo->result.warnings;
+                    }
                 }
             }
 
@@ -272,16 +320,20 @@ static void handleStatus() {
                 lastRun = formatDateTimeLocal(rt.lastStartEpoch) + " / " + formatDateTimeLocal(rt.lastStopEpoch);
             }
             String nextCell = foundNext ? (bestSlot + "<br><span style='color:#555'>" + formatDateTimeLocal(bestTs) + "</span>") : "–";
-            String action = foundNext ? String(actionToText(bestPlan.action)) : "skip";
+            String action = foundNext ? String(actionToLabelDe(bestPlan.action)) : "aussetzen";
             String reason = foundNext ? String(bestPlan.reason) : "Keine Zuweisung";
             if (bestWarnings.length()) reason += "<br><span style='color:#b26a00'>⚠ " + bestWarnings + "</span>";
             if (foundNext) {
                 reason += "<br><span style='color:#666'>Policy: " + String(bestPlan.policySource) + "</span>";
+                if (strlen(bestPlan.appliedRules) > 0) {
+                    reason += "<br><span style='color:#555'>Regeln: " + String(bestPlan.appliedRules) + "</span>";
+                }
             }
             pumpHtml += "<tr><td>" + getPumpLabel(hw, i) + "</td><td>" + status + "</td><td>" + nextCell +
                         "</td><td>" + action + (foundNext ? (" (" + String(bestPlan.durationSec) + "s)") : "") +
                         "</td><td>" + reason + "</td><td>" + lastRun + "</td></tr>";
         }
+        free(nextInfo);
         pumpHtml += "</table></div>";
     } else {
         pumpHtml = "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
@@ -393,15 +445,20 @@ static void handleStatus() {
         String nextName = "–";
         String nextReason = "Kein nächster Slot gefunden.";
         bool fallbackActive = false;
-        for (int si = 0; si < sc.slotCount; si++) {
-            NextSlotDecisionInfo next;
-            if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next)) continue;
-            if (nextTs == 0 || next.triggerTime < nextTs) {
-                nextTs = next.triggerTime;
-                nextName = getSlotLabel(sc.slots[si], si);
-                nextReason = next.result.reason;
-                fallbackActive = next.result.usedFallbackTime;
+        NextSlotDecisionInfo* nextInfo2 = static_cast<NextSlotDecisionInfo*>(
+            heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!nextInfo2) nextInfo2 = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
+        if (nextInfo2) {
+            for (int si = 0; si < sc.slotCount; si++) {
+                if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo2)) continue;
+                if (nextTs == 0 || nextInfo2->triggerTime < nextTs) {
+                    nextTs = nextInfo2->triggerTime;
+                    nextName = getSlotLabel(sc.slots[si], si);
+                    nextReason = nextInfo2->result.reason;
+                    fallbackActive = nextInfo2->result.usedFallbackTime;
+                }
             }
+            free(nextInfo2);
         }
         weatherHtml = "<div style='margin-top:12px;padding:10px;border:1px solid #dde7dd;border-radius:6px;background:#f8fff8'>"
                       "<b>Nächster Slot:</b> " + nextName + " @ " + formatDateTimeLocal(nextTs) +
@@ -433,6 +490,16 @@ static void handleConfigWifi() {
                   "placeholder=\"Leer lassen = keine Änderung\" maxlength=\"63\">";
     }
     page = replaceToken(page, "{password_field}", pwField);
+    bool firstOtaSetup = (cfg.otaPassword[0] == '\0');
+    String otaPwField;
+    if (firstOtaSetup) {
+        otaPwField = "<input type=\"text\" id=\"otaPassword\" name=\"otaPassword\" "
+                     "placeholder=\"OTA-Passwort festlegen\" maxlength=\"63\">";
+    } else {
+        otaPwField = "<input type=\"password\" id=\"otaPassword\" name=\"otaPassword\" "
+                     "placeholder=\"Leer lassen = keine Änderung\" maxlength=\"63\">";
+    }
+    page = replaceToken(page, "{ota_password_field}", otaPwField);
     g_server->send(200, "text/html; charset=UTF-8", page);
     Serial.println("[Web] GET /config_wifi");
 }
@@ -447,6 +514,9 @@ static void handleSaveWifi() {
     // Only update password if a non-empty value was submitted
     if (g_server->hasArg("password") && !g_server->arg("password").isEmpty()) {
         strlcpy(cfg.password, g_server->arg("password").c_str(), sizeof(cfg.password));
+    }
+    if (g_server->hasArg("otaPassword") && !g_server->arg("otaPassword").isEmpty()) {
+        strlcpy(cfg.otaPassword, g_server->arg("otaPassword").c_str(), sizeof(cfg.otaPassword));
     }
     if (g_server->hasArg("hostname")) strlcpy(cfg.hostname, g_server->arg("hostname").c_str(), sizeof(cfg.hostname));
     g_app->getConfigManager()->saveDeviceConfig();
@@ -658,6 +728,15 @@ static void handleConfigHardware() {
     HardwareConfig& hw = g_app->getConfigManager()->getHardwareConfig();
     String page = buildPage(HTML_HARDWARE_PAGE);
 
+    // ── Display section tokens ────────────────────────────────────────────────
+    page = replaceToken(page, "{dm0sel}", hw.displayMode == DISPLAY_OLED ? "selected" : "");
+    page = replaceToken(page, "{dm1sel}", hw.displayMode == DISPLAY_TFT  ? "selected" : "");
+    page = replaceToken(page, "{dm2sel}", hw.displayMode == DISPLAY_BOTH ? "selected" : "");
+    page = replaceToken(page, "{tftSectionDisplay}", hw.displayMode == DISPLAY_OLED ? "none" : "block");
+    page = replaceToken(page, "{tftCsPin}",  String(hw.tftCsPin));
+    page = replaceToken(page, "{tftRstPin}", String(hw.tftRstPin));
+    page = replaceToken(page, "{tftDcPin}",  String(hw.tftDcPin));
+
     // ── Expander section ──────────────────────────────────────────────────────
     page = replaceToken(page, "{expanderCount}", String(hw.expanderCount));
     String expanderRowsHtml;
@@ -719,6 +798,14 @@ static void handleSaveHardware() {
             if (g_server->hasArg(key)) strlcpy(e.name, g_server->arg(key).c_str(), sizeof(e.name));
         }
     }
+
+    // ── Parse display config ──────────────────────────────────────────────────
+    newHw.displayMode = (uint8_t)constrain(
+        g_server->hasArg("displayMode") ? g_server->arg("displayMode").toInt() : DISPLAY_OLED,
+        DISPLAY_OLED, DISPLAY_BOTH);
+    newHw.tftCsPin  = g_server->hasArg("tftCsPin")  ? g_server->arg("tftCsPin").toInt()  : 44;
+    newHw.tftRstPin = g_server->hasArg("tftRstPin") ? g_server->arg("tftRstPin").toInt() : 43;
+    newHw.tftDcPin  = g_server->hasArg("tftDcPin")  ? g_server->arg("tftDcPin").toInt()  : 4;
 
     // ── Parse pumps ───────────────────────────────────────────────────────────
     // pumpCount holds the highest allocated pump index (from JS _nextPumpIdx).
@@ -962,15 +1049,15 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<div id=\"slotBody"; r += si; r += "\" style=\"display:none\">";
     // Enabled + Name row
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label><input type=\"checkbox\" name=\"s"; r += si; r += "_enabled\"";
+    r += "<div class=\"form-col\"><label title=\"Nur aktive Slots werden geprüft.\"><input type=\"checkbox\" name=\"s"; r += si; r += "_enabled\"";
     if (slot.enabled) r += " checked";
     r += "> Aktiv</label></div>";
-    r += "<div class=\"form-col\"><label>Name</label><input type=\"text\" name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Ein Slot ist ein reiner Zeit-Auslöser. Wetterlogik gehört nicht hier hinein.\">Name</label><input type=\"text\" name=\"s"; r += si;
     r += "_name\" value=\""; r += String(slot.name); r += "\" maxlength=\"31\" required></div>";
     r += "</div>";
     // Trigger type + fixed time
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Ausl&ouml;ser</label><select name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Legt fest, worauf sich der Slot zeitlich bezieht: feste Uhrzeit, Sonnenaufgang, Sonnenuntergang oder Offset relativ dazu.\">Ausl&ouml;ser</label><select name=\"s"; r += si;
     r += "_trigger\" onchange=\"onTriggerChange("; r += si; r += ",this.value)\">";
     for (int t = 0; t < 5; t++) {
         r += "<option value=\""; r += t; r += "\"";
@@ -980,26 +1067,26 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "</select></div>";
     char timeBuf[8];
     snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", slot.fixedHour, slot.fixedMinute);
-    r += "<div class=\"form-col\"><label>Uhrzeit / Fallback</label>";
+    r += "<div class=\"form-col\"><label title=\"Bei astronomischen Triggern wird diese Uhrzeit verwendet, falls keine Wetter-/Astronomiedaten verfügbar sind.\">Uhrzeit / Fallback</label>";
     r += "<input type=\"time\" name=\"s"; r += si; r += "_time\" value=\""; r += timeBuf; r += "\"></div>";
     r += "</div>";
     // Offset fields (visible only when trigger=4)
     bool isOffset = (slot.triggerType == TRIGGER_OFFSET);
     r += "<div id=\"offsetRow"; r += si;
     r += "\" style=\"display:"; r += (isOffset ? "flex" : "none"); r += ";\" class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Offset-Basis</label><select name=\"s"; r += si; r += "_offsetBase\">";
+    r += "<div class=\"form-col\"><label title=\"Relativ bedeutet: Der Start wird von Sonnenaufgang, Sonnenuntergang oder Mittagszeit aus berechnet.\">Offset-Basis</label><select name=\"s"; r += si; r += "_offsetBase\">";
     for (int b = 0; b < 3; b++) {
         r += "<option value=\""; r += b; r += "\"";
         if (slot.offsetBase == (uint8_t)b) r += " selected";
         r += ">"; r += baseLabels[b]; r += "</option>";
     }
     r += "</select></div>";
-    r += "<div class=\"form-col\"><label>Offset (Min., negativ = davor, positiv = danach)</label>";
+    r += "<div class=\"form-col\"><label title=\"Negativ = davor, positiv = danach. Beispiel: -30 bedeutet 30 Minuten vor der gewählten Basis.\">Offset (Min., negativ = davor, positiv = danach)</label>";
     r += "<input type=\"number\" name=\"s"; r += si; r += "_offsetMin\" value=\"";
     r += slot.offsetMinutes; r += "\" min=\"-720\" max=\"720\"></div>";
     r += "</div>";
     r += "<div class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Wiederholung</label><select name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Wochentage = feste Tage. Intervall = alle N Tage ab dem Ankerdatum.\">Wiederholung</label><select name=\"s"; r += si;
     r += "_repeatMode\" onchange=\"onRepeatModeChange("; r += si; r += ",this.value)\">";
     r += "<option value=\"0\"";
     if (slot.repeatMode == REPEAT_WEEKDAYS) r += " selected";
@@ -1020,9 +1107,9 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<div id=\"intervalRow"; r += si;
     r += "\" style=\"display:"; r += (intervalMode ? "flex" : "none");
     r += "\" class=\"form-row\">";
-    r += "<div class=\"form-col\"><label>Alle N Tage</label><input type=\"number\" name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Beispiel: 3 bedeutet alle drei Tage.\">Alle N Tage</label><input type=\"number\" name=\"s"; r += si;
     r += "_intervalDays\" value=\""; r += slot.intervalDays; r += "\" min=\"1\" max=\"90\"></div>";
-    r += "<div class=\"form-col\"><label>Startdatum (Anker)</label><input type=\"date\" name=\"s"; r += si;
+    r += "<div class=\"form-col\"><label title=\"Ab diesem Datum wird das Intervall gezählt.\">Startdatum (Anker)</label><input type=\"date\" name=\"s"; r += si;
     r += "_intervalAnchor\" value=\""; r += epochDayToDateString(slot.intervalAnchorDay); r += "\"></div></div>";
     r += "</div></div>";  // slot-entry + slotBody
     return r;
@@ -1045,12 +1132,218 @@ static String getWeatherTemplateLabel(const SlotConfig& sc, int idx) {
         : ("Wetter " + String(idx + 1));
 }
 
+static const char* weatherRuleActionLabel(uint8_t actionType) {
+    // Keep synchronized with the JavaScript label arrays in WebPages.h.
+    switch (actionType) {
+        case WEATHER_RULE_SKIP: return "Aussetzen";
+        case WEATHER_RULE_REDUCE_RUNTIME: return "Laufzeit verkürzen";
+        case WEATHER_RULE_INCREASE_RUNTIME: return "Laufzeit verlängern";
+        default: return "Unbekannt";
+    }
+}
+
+static const char* weatherRuleMetricLabel(uint8_t metric) {
+    // Keep synchronized with the JavaScript label arrays in WebPages.h.
+    switch (metric) {
+        case WEATHER_METRIC_CURRENT_TEMP: return "Aktuelle Temperatur";
+        case WEATHER_METRIC_FORECAST_TEMP_MAX: return "Max. Temperatur in Zeitfenster";
+        case WEATHER_METRIC_CURRENT_RAIN_MM: return "Aktueller Niederschlag (mm)";
+        case WEATHER_METRIC_CURRENT_RAIN_PROB: return "Aktuelle Regenwahrscheinlichkeit (%)";
+        case WEATHER_METRIC_DAILY_RAIN_MM: return "Regen heute (mm)";
+        case WEATHER_METRIC_DAILY_RAIN_PROB: return "Regenwahrscheinlichkeit heute (%)";
+        case WEATHER_METRIC_FORECAST_RAIN_SUM: return "Regenmenge im Zeitfenster (mm)";
+        case WEATHER_METRIC_FORECAST_RAIN_PROB_MAX: return "Max. Regenwahrscheinlichkeit im Zeitfenster (%)";
+        default: return "Wetterwert";
+    }
+}
+
+static bool weatherMetricUsesWindow(uint8_t metric) {
+    return metric == WEATHER_METRIC_FORECAST_TEMP_MAX ||
+           metric == WEATHER_METRIC_FORECAST_RAIN_SUM ||
+           metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX;
+}
+
+static String buildWeatherRuleSummary(const WeatherRule& rule) {
+    String metric = weatherRuleMetricLabel(rule.metric);
+    String op = ">=";
+    switch (rule.comparison) {
+        case WEATHER_OP_GT: op = ">"; break;
+        case WEATHER_OP_GTE: op = ">="; break;
+        case WEATHER_OP_LT: op = "<"; break;
+        case WEATHER_OP_LTE: op = "<="; break;
+    }
+    String threshold = String(rule.threshold, (rule.metric == WEATHER_METRIC_CURRENT_TEMP || rule.metric == WEATHER_METRIC_FORECAST_TEMP_MAX ||
+                                              rule.metric == WEATHER_METRIC_CURRENT_RAIN_MM || rule.metric == WEATHER_METRIC_DAILY_RAIN_MM ||
+                                              rule.metric == WEATHER_METRIC_FORECAST_RAIN_SUM) ? 1 : 0);
+    String unit = (rule.metric == WEATHER_METRIC_CURRENT_TEMP || rule.metric == WEATHER_METRIC_FORECAST_TEMP_MAX)
+                      ? "°C"
+                      : ((rule.metric == WEATHER_METRIC_CURRENT_RAIN_PROB || rule.metric == WEATHER_METRIC_DAILY_RAIN_PROB ||
+                          rule.metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX)
+                             ? "%"
+                             : " mm");
+    String tail = weatherMetricUsesWindow(rule.metric)
+                      ? (" in den nächsten " + String(rule.windowHours) + "h")
+                      : "";
+    if (rule.actionType == WEATHER_RULE_SKIP) {
+        return metric + tail + " " + op + " " + threshold + unit + " → Aussetzen";
+    }
+    String sign = (rule.actionType == WEATHER_RULE_REDUCE_RUNTIME) ? "-" : "+";
+    return metric + tail + " " + op + " " + threshold + unit + " → " +
+           sign + String(rule.effectPercent) + "% Laufzeit";
+}
+
+static String buildWeatherRuleRowHtml(int wi, int ri, const WeatherRule& rule) {
+    String html;
+    html.reserve(1800);
+    bool showWindow = weatherMetricUsesWindow(rule.metric);
+    bool showEffect = rule.actionType != WEATHER_RULE_SKIP;
+    html += "<div id=\"wtr";
+    html += wi;
+    html += "_";
+    html += ri;
+    html += "\" style=\"border:1px solid #dce8f8;border-radius:6px;padding:10px;margin:8px 0;background:#fff\">";
+    html += "<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px\"><b>Regel ";
+    html += (ri + 1);
+    html += "</b><button type=\"button\" onclick=\"deleteWeatherRule(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; Entfernen</button></div>";
+    html += "<div class=\"hint-text\" id=\"wt";
+    html += wi;
+    html += "r";
+    html += ri;
+    html += "Summary\" style=\"margin-bottom:8px\">";
+    html += buildWeatherRuleSummary(rule);
+    html += "</div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-col\"><label title=\"Aktive Regeln werden ausgewertet, deaktivierte Regeln bleiben gespeichert.\"><input type=\"checkbox\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_enabled\"";
+    if (rule.enabled) html += " checked";
+    html += " onchange=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"> Aktiv</label></div>";
+    html += "<div class=\"form-col\"><label title=\"Aussetzen stoppt die Pumpe komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_action\" onchange=\"onRuleActionChange(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ",this.value)\">";
+    for (int a = WEATHER_RULE_SKIP; a <= WEATHER_RULE_INCREASE_RUNTIME; a++) {
+        html += "<option value=\"";
+        html += a;
+        html += "\"";
+        if (rule.actionType == (uint8_t)a) html += " selected";
+        html += ">";
+        html += weatherRuleActionLabel((uint8_t)a);
+        html += "</option>";
+    }
+    html += "</select></div>";
+    html += "</div>";
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-col\"><label title=\"Der Wetterwert wird mit dem Schwellwert verglichen. F\u00fcr Zeitfenster-Regeln werden die n\u00e4chsten Stunden verwendet.\">Wetterwert</label><select name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_metric\" onchange=\"onRuleMetricChange(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ",this.value)\">";
+    for (int m = WEATHER_METRIC_CURRENT_TEMP; m <= WEATHER_METRIC_FORECAST_RAIN_PROB_MAX; m++) {
+        html += "<option value=\"";
+        html += m;
+        html += "\"";
+        if (rule.metric == (uint8_t)m) html += " selected";
+        html += ">";
+        html += weatherRuleMetricLabel((uint8_t)m);
+        html += "</option>";
+    }
+    html += "</select></div>";
+    html += "<div class=\"form-col\"><label title=\"Vergleicht Wetterwert und Schwellwert. Beispiel: > 30°C.\">Vergleich</label><select name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_operator\" onchange=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\">";
+    for (int op = WEATHER_OP_GT; op <= WEATHER_OP_LTE; op++) {
+        const char* opText = (op == WEATHER_OP_GT) ? ">" : (op == WEATHER_OP_GTE) ? ">=" : (op == WEATHER_OP_LT) ? "<" : "<=";
+        html += "<option value=\"";
+        html += op;
+        html += "\"";
+        if (rule.comparison == (uint8_t)op) html += " selected";
+        html += ">";
+        html += opText;
+        html += "</option>";
+    }
+    html += "</select></div>";
+    html += "<div class=\"form-col\"><label title=\"Ab diesem Wert greift die Regel.\">Schwellwert</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_threshold\" value=\"";
+    html += String(rule.threshold, 1);
+    html += "\" step=\"0.1\" oninput=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"></div></div>";
+    html += "<div id=\"wt";
+    html += wi;
+    html += "r";
+    html += ri;
+    html += "WindowRow\" class=\"form-row\" style=\"display:";
+    html += (showWindow ? "flex" : "none");
+    html += "\"><div class=\"form-col\"><label title=\"Nur f\u00fcr Zeitfenster-Regeln: wie viele n\u00e4chste Stunden ausgewertet werden.\">Zeitfenster (h)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_windowHours\" value=\"";
+    html += rule.windowHours;
+    html += "\" min=\"1\" max=\"48\" oninput=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"></div></div>";
+    html += "<div id=\"wt";
+    html += wi;
+    html += "r";
+    html += ri;
+    html += "EffectRow\" class=\"form-row\" style=\"display:";
+    html += (showEffect ? "flex" : "none");
+    html += "\"><div class=\"form-col\"><label title=\"Positive Prozentwerte beziehen sich immer auf die Basislaufzeit der Zuweisung.\">Effekt (%)</label><input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_r";
+    html += ri;
+    html += "_effectPct\" value=\"";
+    html += rule.effectPercent;
+    html += "\" min=\"1\" max=\"200\" oninput=\"onRuleChanged(";
+    html += wi;
+    html += ",";
+    html += ri;
+    html += ")\"></div></div></div>";
+    return html;
+}
+
 static String buildWeatherTemplateRowHtml(int wi, const WeatherTemplate& wt) {
     String label = wt.name[0] ? String(wt.name) : ("Wetter " + String(wi + 1));
     String html;
-    html.reserve(1200);
+    html.reserve(3200);
     html += "<div class=\"pump-entry\" id=\"wt";
     html += wi;
+    html += "\" data-next-rule=\"";
+    html += wt.ruleCount;
     html += "\" style=\"border:1px solid #cfe0f6;padding:12px;margin-bottom:12px;border-radius:6px;background:#f7fbff\">";
     html += "<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\">";
     html += "<b style=\"font-size:1.05em\">🌦️ ";
@@ -1071,34 +1364,29 @@ static String buildWeatherTemplateRowHtml(int wi, const WeatherTemplate& wt) {
     html += "\" maxlength=\"31\" oninput=\"updateWeatherTemplateHeading(";
     html += wi;
     html += ",this)\" required></div></div>";
-    html += "<div class=\"form-row\">";
-    html += "<div class=\"form-col\"><label>Aussetzen bei Regen (mm)</label><input type=\"number\" name=\"wt";
+    html += "<div class=\"hint-text\" style=\"margin-bottom:8px\">Ein Template kann mehrere Regeln enthalten. Reihenfolge im System: erst <b>Aussetzen</b>, danach <b>Verkürzen/Verlängern</b>. Zuschl&#228;ge und Abz&#252;ge beziehen sich immer auf die Basislaufzeit der Zuweisung.</div>";
+    html += "<input type=\"hidden\" name=\"wt";
     html += wi;
-    html += "_skipRainMm\" value=\"";
-    html += wt.weather.skipIfRainMm;
-    html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div>";
-    html += "<div class=\"form-col\"><label>Aussetzen bei Regenwahrsch. (%)</label><input type=\"number\" name=\"wt";
+    html += "_ruleCount\" id=\"wt";
     html += wi;
-    html += "_skipRainPct\" value=\"";
-    html += wt.weather.skipIfRainPct;
-    html += "\" min=\"0\" max=\"100\"></div>";
-    html += "</div><div class=\"form-row\">";
-    html += "<div class=\"form-col\"><label>Nur wenn Temp. ≥ (°C)</label><input type=\"number\" name=\"wt";
+    html += "RuleCount\" value=\"";
+    html += wt.ruleCount;
+    html += "\">";
+    html += "<div id=\"wtRules";
     html += wi;
-    html += "_aboveTemp\" value=\"";
-    html += wt.weather.runOnlyAboveTemp;
-    html += "\" min=\"-99\" max=\"60\" step=\"0.5\"></div>";
-    html += "<div class=\"form-col\"><label>Reduzieren bei Regen (mm)</label><input type=\"number\" name=\"wt";
+    html += "\">";
+    for (int ri = 0; ri < wt.ruleCount; ri++) {
+        html += buildWeatherRuleRowHtml(wi, ri, wt.rules[ri]);
+    }
+    html += "</div>";
+    html += "<div id=\"wt";
     html += wi;
-    html += "_reduceRainMm\" value=\"";
-    html += wt.weather.reduceIfRainMm;
-    html += "\" min=\"0\" max=\"100\" step=\"0.1\"></div>";
-    html += "<div class=\"form-col\"><label>Reduktion (%)</label><input type=\"number\" name=\"wt";
+    html += "NoRulesMsg\" class=\"hint-text\" style=\"display:";
+    html += (wt.ruleCount == 0 ? "block" : "none");
+    html += ";margin:8px 0\">Noch keine Wetterregel definiert.</div>";
+    html += "<button type=\"button\" class=\"btn\" onclick=\"addWeatherRule(";
     html += wi;
-    html += "_reducePct\" value=\"";
-    html += wt.weather.reducePct;
-    html += "\" min=\"1\" max=\"99\"></div>";
-    html += "</div></div>";
+    html += ")\" style=\"background:#5c88c8;padding:7px 14px;font-size:13px\">+ Regel hinzuf&#252;gen</button></div>";
     return html;
 }
 
@@ -1124,7 +1412,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         html += displayIdx;
         html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
         html += "</div></div><div class=\"form-row\">";
-        html += "<div class=\"form-col\"><label>Slot</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Ein Slot beschreibt nur, wann geprüft wird. Er enthält keine pumpenspezifische Wetterlogik.\">Slot</label><select name=\"as";
         html += displayIdx;
         html += "_slot\">";
         for (int si = 0; si < sc.slotCount; si++) {
@@ -1136,7 +1424,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label>Pumpe</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Die konkrete Pumpe, die bei dieser Zuweisung laufen soll.\">Pumpe</label><select name=\"as";
         html += displayIdx;
         html += "_pump\">";
         for (int pi = 0; pi < hw.relayCount; pi++) {
@@ -1148,7 +1436,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label>Wetter-Template</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Hier wird festgelegt, welche Wetterregeln für genau diese Pumpe und diesen Slot gelten. Kein Template = reine Zeitsteuerung.\">Wetter-Template</label><select name=\"as";
         html += displayIdx;
         html += "_weatherTemplate\">";
         html += "<option value=\"-1\"";
@@ -1165,7 +1453,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label>Dauer (s)</label><input type=\"number\" name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Basislaufzeit ohne Wetteranpassung. Zuschläge und Abzüge der Regeln beziehen sich auf diesen Wert.\">Dauer (s)</label><input type=\"number\" name=\"as";
         html += displayIdx;
         html += "_duration\" value=\"";
         html += a.durationSec;
@@ -1400,17 +1688,34 @@ static void handleSaveWatering() {
         wt = WeatherTemplate{};
         strlcpy(wt.name, g_server->arg(key).c_str(), sizeof(wt.name));
 
-        snprintf(key, sizeof(key), "wt%d_skipRainMm", wi);
-        wt.weather.skipIfRainMm = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
-        snprintf(key, sizeof(key), "wt%d_skipRainPct", wi);
-        wt.weather.skipIfRainPct = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
-        snprintf(key, sizeof(key), "wt%d_aboveTemp", wi);
-        wt.weather.runOnlyAboveTemp = g_server->hasArg(key) ? g_server->arg(key).toFloat() : -99.0f;
-        snprintf(key, sizeof(key), "wt%d_reduceRainMm", wi);
-        wt.weather.reduceIfRainMm = g_server->hasArg(key) ? g_server->arg(key).toFloat() : 0.0f;
-        snprintf(key, sizeof(key), "wt%d_reducePct", wi);
-        wt.weather.reducePct = (uint8_t)constrain(
-            g_server->hasArg(key) ? g_server->arg(key).toInt() : 50, 1, 99);
+        snprintf(key, sizeof(key), "wt%d_ruleCount", wi);
+        int ruleCount = constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0,
+                                  0, MAX_SUBMITTED_RULE_INDICES);
+        for (int ri = 0; ri < ruleCount && wt.ruleCount < MAX_WEATHER_RULES_PER_TEMPLATE; ri++) {
+            char rkey[40];
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_action", wi, ri);
+            if (!g_server->hasArg(rkey)) continue;
+
+            WeatherRule& rule = wt.rules[wt.ruleCount++];
+            rule = WeatherRule{};
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_enabled", wi, ri);
+            rule.enabled = g_server->hasArg(rkey);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_action", wi, ri);
+            rule.actionType = (uint8_t)constrain(g_server->arg(rkey).toInt(),
+                                                 WEATHER_RULE_SKIP, WEATHER_RULE_INCREASE_RUNTIME);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_metric", wi, ri);
+            rule.metric = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : WEATHER_METRIC_DAILY_RAIN_MM,
+                                             WEATHER_METRIC_CURRENT_TEMP, WEATHER_METRIC_FORECAST_RAIN_PROB_MAX);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_operator", wi, ri);
+            rule.comparison = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : WEATHER_OP_GTE,
+                                                 WEATHER_OP_GT, WEATHER_OP_LTE);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_threshold", wi, ri);
+            rule.threshold = g_server->hasArg(rkey) ? g_server->arg(rkey).toFloat() : 0.0f;
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_windowHours", wi, ri);
+            rule.windowHours = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : 24, 1, 48);
+            snprintf(rkey, sizeof(rkey), "wt%d_r%d_effectPct", wi, ri);
+            rule.effectPercent = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : 25, 1, 200);
+        }
         newSc.weatherTemplateCount++;
     }
 
@@ -1484,8 +1789,19 @@ static const char* actionToText(WateringDecisionAction action) {
     switch (action) {
         case WATER_ACTION_EXECUTE: return "execute";
         case WATER_ACTION_REDUCE:  return "reduce";
+        case WATER_ACTION_EXTEND:  return "extend";
         case WATER_ACTION_FALLBACK:return "fallback";
         default:                   return "skip";
+    }
+}
+
+static const char* actionToLabelDe(WateringDecisionAction action) {
+    switch (action) {
+        case WATER_ACTION_EXECUTE: return "ausführen";
+        case WATER_ACTION_REDUCE:  return "verkürzen";
+        case WATER_ACTION_EXTEND:  return "verlängern";
+        case WATER_ACTION_FALLBACK:return "Fallback";
+        default:                   return "aussetzen";
     }
 }
 
@@ -1525,7 +1841,12 @@ static bool findNextSlotDecision(int slotIndex,
                                  bool weatherAvailable,
                                  bool weatherStale,
                                  NextSlotDecisionInfo& out) {
-    out = NextSlotDecisionInfo{};
+    // Use memset instead of `out = NextSlotDecisionInfo{}` to avoid a ~14 KB
+    // stack temporary (NextSlotDecisionInfo embeds WateringDecisionResult).
+    // Copy elision does not apply to assignment, so the value-construction form
+    // would place 14 KB on the stack and overflow into heap metadata.
+    memset(&out, 0, sizeof(out));
+    out.result.slotIndex = -1;  // restore only non-zero default inside WateringDecisionResult
     if (slotIndex < 0 || slotIndex >= sc.slotCount) return false;
     if (nowLocal < 1000000L) return false;
 
@@ -1559,12 +1880,11 @@ static bool findNextSlotDecision(int slotIndex,
         in.slotIndex = slotIndex;
         in.enforceDayMatch = true;
         in.enforceTriggerMinute = true;
-        WateringDecisionResult res = WateringDecisionEngine::evaluateSlot(in);
-        if (!res.validInput || !res.dayMatched || !res.triggerMatched) continue;
+        WateringDecisionEngine::evaluateSlot(in, out.result);
+        if (!out.result.validInput || !out.result.dayMatched || !out.result.triggerMatched) continue;
 
         out.found = true;
         out.triggerTime = trigger;
-        out.result = res;
         return true;
     }
     return false;
@@ -1646,21 +1966,29 @@ static void handleApiWateringSimulate() {
     in.enforceDayMatch = true;
     in.enforceTriggerMinute = true;
 
-    WateringDecisionResult result = WateringDecisionEngine::evaluateSlot(in);
+    // Allocate decision result in PSRAM to avoid overflowing the 8 KB loopTask stack
+    WateringDecisionResult* result = static_cast<WateringDecisionResult*>(
+        heap_caps_calloc(1, sizeof(WateringDecisionResult), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!result) result = static_cast<WateringDecisionResult*>(calloc(1, sizeof(WateringDecisionResult)));
+    if (!result) {
+        g_server->send(500, "text/plain", "OOM");
+        return;
+    }
+    WateringDecisionEngine::evaluateSlot(in, *result);
 
     JsonDocument doc;
-    doc["ok"] = result.validInput;
-    doc["slotIndex"] = result.slotIndex;
-    doc["action"] = actionToText(result.action);
-    doc["reason"] = result.reason;
-    doc["weatherJustification"] = result.weatherJustification;
-    doc["warnings"] = result.warnings;
-    doc["triggerMatched"] = result.triggerMatched;
-    doc["dayMatched"] = result.dayMatched;
-    doc["triggerTime"] = formatTimeHM(result.triggerTime);
-    doc["triggerSource"] = result.triggerSource;
-    doc["totalDurationSec"] = result.totalDurationSec;
-    doc["planCount"] = result.planCount;
+    doc["ok"] = result->validInput;
+    doc["slotIndex"] = result->slotIndex;
+    doc["action"] = actionToText(result->action);
+    doc["reason"] = result->reason;
+    doc["weatherJustification"] = result->weatherJustification;
+    doc["warnings"] = result->warnings;
+    doc["triggerMatched"] = result->triggerMatched;
+    doc["dayMatched"] = result->dayMatched;
+    doc["triggerTime"] = formatTimeHM(result->triggerTime);
+    doc["triggerSource"] = result->triggerSource;
+    doc["totalDurationSec"] = result->totalDurationSec;
+    doc["planCount"] = result->planCount;
     if (weatherPtr) {
         doc["sunrise"] = formatTimeHM(weatherPtr->sunrise);
         doc["sunset"] = formatTimeHM(weatherPtr->sunset);
@@ -1674,17 +2002,20 @@ static void handleApiWateringSimulate() {
         }
     }
     JsonArray planArr = doc["plan"].to<JsonArray>();
-    for (int i = 0; i < result.planCount; i++) {
+    for (int i = 0; i < result->planCount; i++) {
         JsonObject p = planArr.add<JsonObject>();
         p["order"] = i + 1;
-        p["pumpIndex"] = result.plan[i].pumpIndex;
-        p["pumpName"] = getPumpLabel(hw, result.plan[i].pumpIndex);
-        p["baseDurationSec"] = result.plan[i].baseDurationSec;
-        p["durationSec"] = result.plan[i].durationSec;
-        p["action"] = actionToText(result.plan[i].action);
-        p["reason"] = result.plan[i].reason;
-        p["policySource"] = result.plan[i].policySource;
+        p["pumpIndex"] = result->plan[i].pumpIndex;
+        p["pumpName"] = getPumpLabel(hw, result->plan[i].pumpIndex);
+        p["baseDurationSec"] = result->plan[i].baseDurationSec;
+        p["durationSec"] = result->plan[i].durationSec;
+        p["adjustmentPercent"] = result->plan[i].adjustmentPercent;
+        p["action"] = actionToText(result->plan[i].action);
+        p["reason"] = result->plan[i].reason;
+        p["policySource"] = result->plan[i].policySource;
+        p["appliedRules"] = result->plan[i].appliedRules;
     }
+    free(result);
 
     String json;
     serializeJson(doc, json);
@@ -1786,10 +2117,18 @@ static void handleApiWateringStatus() {
     JsonArray slotsArr = doc["slots"].to<JsonArray>();
     time_t nextGlobalTs = 0;
     String nextGlobalName = "";
+
+    // Allocate NextSlotDecisionInfo (~14 KB) in PSRAM once and reuse across
+    // both the slots and pumps loops to avoid overflowing the 8 KB loopTask stack.
+    NextSlotDecisionInfo* nextInfo = static_cast<NextSlotDecisionInfo*>(
+        heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!nextInfo) nextInfo = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
+
     for (int si = 0; si < sc.slotCount; si++) {
         const WateringSlot& slot = sc.slots[si];
-        NextSlotDecisionInfo next;
-        findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next);
+        if (nextInfo) {
+            findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo);
+        }
 
         JsonObject s = slotsArr.add<JsonObject>();
         s["slotIndex"] = si;
@@ -1797,28 +2136,30 @@ static void handleApiWateringStatus() {
         s["enabled"] = slot.enabled;
         s["repeatMode"] = slot.repeatMode == REPEAT_INTERVAL_DAYS ? "interval" : "weekdays";
         s["repeatRule"] = describeRepeatRule(slot);
-        s["nextTrigger"] = next.found ? formatDateTimeLocal(next.triggerTime) : String("–");
-        s["nextAction"] = next.found ? actionToText(next.result.action) : "skip";
-        s["reason"] = next.found ? String(next.result.reason) : String("Kein nächster Lauf gefunden.");
-        s["triggerSource"] = next.found ? String(next.result.triggerSource) : String("");
-        s["warnings"] = next.found ? String(next.result.warnings) : String("");
+        s["nextTrigger"] = (nextInfo && nextInfo->found) ? formatDateTimeLocal(nextInfo->triggerTime) : String("–");
+        s["nextAction"] = (nextInfo && nextInfo->found) ? actionToText(nextInfo->result.action) : "skip";
+        s["reason"] = (nextInfo && nextInfo->found) ? String(nextInfo->result.reason) : String("Kein nächster Lauf gefunden.");
+        s["triggerSource"] = (nextInfo && nextInfo->found) ? String(nextInfo->result.triggerSource) : String("");
+        s["warnings"] = (nextInfo && nextInfo->found) ? String(nextInfo->result.warnings) : String("");
 
         JsonArray plan = s["plan"].to<JsonArray>();
-        if (next.found) {
-            for (int i = 0; i < next.result.planCount; i++) {
+        if (nextInfo && nextInfo->found) {
+            for (int i = 0; i < nextInfo->result.planCount; i++) {
                 JsonObject p = plan.add<JsonObject>();
-                p["pumpIndex"] = next.result.plan[i].pumpIndex;
-                p["pumpName"] = getPumpLabel(hw, next.result.plan[i].pumpIndex);
-                p["action"] = actionToText(next.result.plan[i].action);
-                p["durationSec"] = next.result.plan[i].durationSec;
-                p["baseDurationSec"] = next.result.plan[i].baseDurationSec;
-                p["reason"] = next.result.plan[i].reason;
-                p["policySource"] = next.result.plan[i].policySource;
+                p["pumpIndex"] = nextInfo->result.plan[i].pumpIndex;
+                p["pumpName"] = getPumpLabel(hw, nextInfo->result.plan[i].pumpIndex);
+                p["action"] = actionToText(nextInfo->result.plan[i].action);
+                p["durationSec"] = nextInfo->result.plan[i].durationSec;
+                p["baseDurationSec"] = nextInfo->result.plan[i].baseDurationSec;
+                p["adjustmentPercent"] = nextInfo->result.plan[i].adjustmentPercent;
+                p["reason"] = nextInfo->result.plan[i].reason;
+                p["policySource"] = nextInfo->result.plan[i].policySource;
+                p["appliedRules"] = nextInfo->result.plan[i].appliedRules;
             }
         }
 
-        if (next.found && (nextGlobalTs == 0 || next.triggerTime < nextGlobalTs)) {
-            nextGlobalTs = next.triggerTime;
+        if (nextInfo && nextInfo->found && (nextGlobalTs == 0 || nextInfo->triggerTime < nextGlobalTs)) {
+            nextGlobalTs = nextInfo->triggerTime;
             nextGlobalName = getSlotLabel(slot, si);
         }
     }
@@ -1842,18 +2183,21 @@ static void handleApiWateringStatus() {
         time_t bestTs = 0;
         String bestSlot = "–";
         WateringDecisionPumpPlan bestPlan;
-        WateringDecisionResult bestResult;
-        for (int si = 0; si < sc.slotCount; si++) {
-            NextSlotDecisionInfo next;
-            if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, next)) continue;
-            WateringDecisionPumpPlan pp;
-            if (!findPlanForPump(next.result, pi, pp)) continue;
-            if (!foundPumpNext || next.triggerTime < bestTs) {
-                foundPumpNext = true;
-                bestTs = next.triggerTime;
-                bestSlot = getSlotLabel(sc.slots[si], si);
-                bestPlan = pp;
-                bestResult = next.result;
+        char bestTriggerSource[96] = "";
+        char bestWarnings[160] = "";
+        if (nextInfo) {
+            for (int si = 0; si < sc.slotCount; si++) {
+                if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo)) continue;
+                WateringDecisionPumpPlan pp;
+                if (!findPlanForPump(nextInfo->result, pi, pp)) continue;
+                if (!foundPumpNext || nextInfo->triggerTime < bestTs) {
+                    foundPumpNext = true;
+                    bestTs = nextInfo->triggerTime;
+                    bestSlot = getSlotLabel(sc.slots[si], si);
+                    bestPlan = pp;
+                    strlcpy(bestTriggerSource, nextInfo->result.triggerSource, sizeof(bestTriggerSource));
+                    strlcpy(bestWarnings, nextInfo->result.warnings, sizeof(bestWarnings));
+                }
             }
         }
         p["nextSlot"] = foundPumpNext ? bestSlot : String("–");
@@ -1861,9 +2205,12 @@ static void handleApiWateringStatus() {
         p["nextAction"] = foundPumpNext ? String(actionToText(bestPlan.action)) : String("skip");
         p["nextReason"] = foundPumpNext ? String(bestPlan.reason) : String("Keine Zuweisung.");
         p["nextDurationSec"] = foundPumpNext ? bestPlan.durationSec : 0;
-        p["triggerSource"] = foundPumpNext ? String(bestResult.triggerSource) : String("");
-        p["warnings"] = foundPumpNext ? String(bestResult.warnings) : String("");
+        p["adjustmentPercent"] = foundPumpNext ? bestPlan.adjustmentPercent : 0;
+        p["triggerSource"] = foundPumpNext ? String(bestTriggerSource) : String("");
+        p["warnings"] = foundPumpNext ? String(bestWarnings) : String("");
+        p["appliedRules"] = foundPumpNext ? String(bestPlan.appliedRules) : String("");
     }
+    free(nextInfo);
 
     JsonArray warnings = doc["warnings"].to<JsonArray>();
     if (weatherStale) warnings.add("Wetterdaten sind veraltet.");
@@ -1875,8 +2222,159 @@ static void handleApiWateringStatus() {
     g_server->send(200, "application/json", json);
 }
 
+// ─── Run log page ─────────────────────────────────────────────────────────────
+
+static void handleRunLog() {
+    String page = buildPage(HTML_RUNLOG_PAGE);
+    g_server->send(200, "text/html; charset=UTF-8", page);
+}
+
+// ─── Run log API ──────────────────────────────────────────────────────────────
+
+static void handleApiRunLog() {
+    WateringRunLog* rl = g_app->getRunLog();
+    String json;
+    if (rl) rl->getJson(json);
+    else    json = "[]";
+    g_server->send(200, "application/json", json);
+}
+
+static void handleApiRunLogClear() {
+    WateringRunLog* rl = g_app->getRunLog();
+    if (rl) rl->clear();
+    g_server->send(200, "application/json", "{\"success\":true}");
+}
+
+// ─── Backup page ──────────────────────────────────────────────────────────────
+
+static void handleBackupPage() {
+    String page = buildPage(HTML_BACKUP_PAGE);
+    page.replace("{restore_msg}", "");
+    g_server->send(200, "text/html; charset=UTF-8", page);
+}
+
+// ─── Backup download – GET /api/backup ───────────────────────────────────────
+
+static void handleApiBackup() {
+    WhPsramAllocator alloc;
+    JsonDocument doc(&alloc);
+    doc["version"] = 1;
+    doc["ts"]      = (long long)time(nullptr);
+
+    // Embed each config file as a nested JSON object
+    const struct { const char* key; const char* path; } configFiles[] = {
+        { "config",   "/config.json"   },
+        { "hardware", "/hardware.json" },
+        { "watering", "/watering.json" },
+    };
+    for (size_t i = 0; i < 3; i++) {
+        if (!LittleFS.exists(configFiles[i].path)) continue;
+        File fh = LittleFS.open(configFiles[i].path, "r");
+        if (!fh) continue;
+        JsonDocument tmp(&alloc);
+        if (!deserializeJson(tmp, fh)) {
+            doc[configFiles[i].key] = tmp.as<JsonVariant>();
+        }
+        fh.close();
+    }
+
+    String json;
+    serializeJson(doc, json);
+    g_server->sendHeader("Content-Disposition",
+                         "attachment; filename=\"bewaesserung_backup.json\"");
+    g_server->send(200, "application/json", json);
+}
+
+// ─── Restore upload – POST /api/restore ──────────────────────────────────────
+
+static File _restoreFile;
+static bool _restoreReady = false;
+
+static void handleRestoreUploadChunk() {
+    if (!g_server) return;
+    if (g_server->uri() != "/api/restore") return;
+
+    HTTPUpload& upload = g_server->upload();
+
+    if (upload.status == UPLOAD_FILE_START) {
+        _restoreReady = false;
+        if (LittleFS.exists("/restore_tmp.json")) LittleFS.remove("/restore_tmp.json");
+        _restoreFile = LittleFS.open("/restore_tmp.json", "w");
+        if (!_restoreFile) Serial.println("[Restore] Cannot open temp file");
+        else               Serial.println("[Restore] Upload started");
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (_restoreFile) _restoreFile.write(upload.buf, upload.currentSize);
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (_restoreFile) {
+            _restoreFile.close();
+            _restoreReady = true;
+            Serial.printf("[Restore] Upload complete (%u bytes)\n", (unsigned)upload.totalSize);
+        }
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+        if (_restoreFile) { _restoreFile.close(); LittleFS.remove("/restore_tmp.json"); }
+        _restoreReady = false;
+    }
+}
+
+static void handleRestoreBegin() {
+    if (!_restoreReady) {
+        String page = buildPage(HTML_BACKUP_PAGE);
+        page.replace("{restore_msg}", "<div class='alert-danger'>&#10007; Upload fehlgeschlagen.</div>");
+        g_server->send(500, "text/html; charset=UTF-8", page);
+        return;
+    }
+
+    File f = LittleFS.open("/restore_tmp.json", "r");
+    if (!f) {
+        String page = buildPage(HTML_BACKUP_PAGE);
+        page.replace("{restore_msg}", "<div class='alert-danger'>&#10007; Temp-Datei nicht lesbar.</div>");
+        g_server->send(500, "text/html; charset=UTF-8", page);
+        return;
+    }
+
+    WhPsramAllocator alloc;
+    JsonDocument doc(&alloc);
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    LittleFS.remove("/restore_tmp.json");
+    _restoreReady = false;
+
+    if (err || !doc["version"].is<int>()) {
+        String page = buildPage(HTML_BACKUP_PAGE);
+        String msg = "<div class='alert-danger'>&#10007; Backup-Datei ung&uuml;ltig";
+        if (err) { msg += ": "; msg += err.c_str(); }
+        msg += ".</div>";
+        page.replace("{restore_msg}", msg);
+        g_server->send(400, "text/html; charset=UTF-8", page);
+        return;
+    }
+
+    int restored = 0;
+    const struct { const char* key; const char* path; } restoreFiles[] = {
+        { "config",   "/config.json"   },
+        { "hardware", "/hardware.json" },
+        { "watering", "/watering.json" },
+    };
+    for (size_t i = 0; i < 3; i++) {
+        if (!doc[restoreFiles[i].key].is<JsonObject>()) continue;
+        File fw = LittleFS.open(restoreFiles[i].path, "w");
+        if (!fw) { Serial.printf("[Restore] Cannot write %s\n", restoreFiles[i].path); continue; }
+        serializeJson(doc[restoreFiles[i].key], fw);
+        fw.close();
+        Serial.printf("[Restore] Restored %s\n", restoreFiles[i].path);
+        restored++;
+    }
+
+    String page = buildPage(HTML_BACKUP_PAGE);
+    String msg = "<div class='alert-info'>&#10003; ";
+    msg += restored;
+    msg += " Konfigurationsdatei(en) wiederhergestellt. Ger&auml;t startet neu...</div>";
+    page.replace("{restore_msg}", msg);
+    g_server->send(200, "text/html; charset=UTF-8", page);
+    g_app->scheduleRestart(3000);
+}
+
 static void handleNotFound() {
-    // Captive portal redirect in AP mode
     if (g_app->isApModeActive()) {
         g_server->sendHeader("Location", "/", true);
         g_server->send(302, "text/plain", "");

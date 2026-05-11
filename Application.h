@@ -6,11 +6,13 @@ class ConfigManager;
 class WifiManager;
 class TimeSync;
 class OledStatus;
+class TftStatus;
 class Ds3231Manager;
 class RelayManager;
 class WebServerManager;
 class WeatherManager;
 class WateringScheduler;
+class WateringRunLog;
 
 class Application {
 public:
@@ -37,10 +39,12 @@ public:
     StateManager*     getStateManager()     { return _stateManager; }
     WeatherManager*   getWeatherManager()   { return _weatherManager; }
     WateringScheduler* getScheduler()       { return _scheduler; }
+    WateringRunLog*   getRunLog()           { return _runLog; }
 
 private:
     void startWifi();
     void startWebServer();
+    void startOta();
     void executeApplyLiveConfig();
 
     StateManager*      _stateManager   = nullptr;
@@ -48,15 +52,19 @@ private:
     WifiManager*       _wifiManager    = nullptr;
     TimeSync*          _timeSync       = nullptr;
     OledStatus*        _oledStatus     = nullptr;
+    TftStatus*         _tftStatus      = nullptr;
     Ds3231Manager*     _ds3231         = nullptr;
     RelayManager*      _relayManager   = nullptr;
     WebServerManager*  _webServer      = nullptr;
     WeatherManager*    _weatherManager = nullptr;
     WateringScheduler* _scheduler      = nullptr;
+    WateringRunLog*    _runLog         = nullptr;
 
     bool          _configNeedsApply   = false;
     bool          _restartScheduled   = false;
     unsigned long _restartAt          = 0;
     bool          _apModeActive       = false;
     bool          _ds3231Present      = false;
+    bool          _otaStarted         = false;
+    bool          _otaNetworkReadyLast = false;
 };
