@@ -620,6 +620,14 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         }
 
         if (p.action != WATER_ACTION_SKIP) {
+            if (p.adjustmentPercent != 0) {
+                char wxWarn[160];
+                snprintf(wxWarn, sizeof(wxWarn),
+                         "Pumpe %u: Wetteranpassung %+d%% (Basis %ds -> Bewässerung %ds).",
+                         (unsigned)(p.pumpIndex + 1), p.adjustmentPercent,
+                         p.baseDurationSec, p.plannedDurationSec);
+                appendText(out.warnings, sizeof(out.warnings), wxWarn, " | ");
+            }
             int pumpMaxRuntime = input.hardwareConfig->pumps[p.pumpIndex].maxRuntimeSec;
             p.durationSec = p.plannedDurationSec + p.leadTimeSec;
             if (pumpMaxRuntime > 0 && p.durationSec > pumpMaxRuntime) {
