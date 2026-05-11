@@ -255,6 +255,7 @@ bool ConfigManager::loadHardwareConfig() {
                 p.pin           = po["pin"]            | -1;
                 p.invertLogic   = po["invertLogic"]    | false;
                 p.maxRuntimeSec = po["maxRuntimeSec"]  | 300;
+                p.leadTimeSec   = constrain((int)(po["leadTimeSec"] | 0), 0, 3600);
                 strlcpy(p.name,  po["name"]  | "", sizeof(p.name));
                 strlcpy(p.notes, po["notes"] | "", sizeof(p.notes));
                 if (p.outputType == OUTPUT_TYPE_PCF8574) {
@@ -371,6 +372,7 @@ bool ConfigManager::saveHardwareConfig() {
         po["i2cChannel"]    = p.i2cChannel;
         po["invertLogic"]   = p.invertLogic;
         po["maxRuntimeSec"] = p.maxRuntimeSec;
+        po["leadTimeSec"]   = p.leadTimeSec;
         po["notes"]         = p.notes;
     }
     serializeJson(doc, f);
@@ -399,6 +401,8 @@ bool ConfigManager::loadSlotConfig() {
 
     // ── New format: slots + assignments ──────────────────────────────────────
     if (doc["slots"].is<JsonArray>()) {
+        _slotConfig.automationLockEnabled = doc["automationLockEnabled"] | false;
+        _slotConfig.automationLockUntil = (time_t)((long)(doc["automationLockUntil"] | 0L));
         JsonArray sArr = doc["slots"].as<JsonArray>();
         int sc = min((int)sArr.size(), MAX_SLOTS);
         _slotConfig.slotCount = sc;
@@ -576,6 +580,8 @@ bool ConfigManager::saveSlotConfig() {
         return false;
     }
     JsonDocument doc;
+    doc["automationLockEnabled"] = _slotConfig.automationLockEnabled;
+    doc["automationLockUntil"]   = (long)_slotConfig.automationLockUntil;
     JsonArray sArr = doc["slots"].to<JsonArray>();
     for (int i = 0; i < _slotConfig.slotCount; i++) {
         const WateringSlot& s = _slotConfig.slots[i];
@@ -641,6 +647,14 @@ bool ConfigManager::isWateringConfigValid() const {
     return _slotConfig.slotCount > 0 &&
            _slotConfig.assignCount > 0 &&
            _hardwareConfig.relayCount > 0;
+}
+
+bool ConfigManager::isAutomationLocked(time_t nowLocal) const {
+    if (!_slotConfig.automationLockEnabled) return false;
+    if (_slotConfig.automationLockUntil <= 0) return false;
+    if (nowLocal <= 0) nowLocal = time(nullptr);
+    if (nowLocal <= 0) return true;
+    return nowLocal < _slotConfig.automationLockUntil;
 }
 
 bool ConfigManager::resetAll() {

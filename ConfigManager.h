@@ -49,6 +49,7 @@ struct PumpEntry {
     uint8_t i2cChannel     = 0;    // Channel on expander (0-7 PCF8574, 0-15 PCF8575)
     bool    invertLogic    = false; // active-low per pump
     int     maxRuntimeSec  = 300;   // max runtime / test timeout
+    int     leadTimeSec    = 0;     // hose/prime lead time added to automatic runtime
     char    notes[64]      = "";
 };
 
@@ -182,6 +183,8 @@ struct SlotConfig {
     WeatherTemplate weatherTemplates[MAX_WEATHER_TEMPLATES];
     int assignCount = 0;
     SlotPumpAssignment assignments[MAX_SLOT_ASSIGNMENTS];
+    bool  automationLockEnabled = false;
+    time_t automationLockUntil  = 0; // local epoch; active while now < until
 };
 
 // ─── Weather data cache ───────────────────────────────────────────────────────
@@ -229,6 +232,8 @@ public:
     SlotConfig& getSlotConfig() { return _slotConfig; }
 
     bool isWateringConfigValid() const;
+    bool isAutomationLocked(time_t nowLocal = 0) const;
+    time_t getAutomationLockUntil() const { return _slotConfig.automationLockUntil; }
 
     bool resetAll();
 

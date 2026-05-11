@@ -16,6 +16,8 @@ struct WateringDecisionPumpPlan {
     uint8_t assignmentIndex = 0;
     uint8_t pumpIndex       = 0;
     int     baseDurationSec = 0;
+    int     plannedDurationSec = 0; // weather-adjusted plant watering time
+    int     leadTimeSec     = 0;    // per-pump hose/prime lead time
     int     durationSec     = 0;
     int     adjustmentPercent = 0;
     WateringDecisionAction action = WATER_ACTION_SKIP;

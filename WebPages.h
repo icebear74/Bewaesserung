@@ -420,7 +420,7 @@ function mkRow(i,d){
   var t=d.outputType||0;
   var t0=t===0?'selected':''; var t1=t===1?'selected':'';
   var nm=d.name||''; var nt=d.notes||'';
-  var pin=d.pin!=null?d.pin:-1; var mr=d.maxRuntimeSec||300;
+  var pin=d.pin!=null?d.pin:-1; var mr=d.maxRuntimeSec||300; var lt=d.leadTimeSec||0;
   var expIdx=d.expanderIndex||0;
   var chan=d.i2cChannel!=null?d.i2cChannel:0;
   var maxChan=(_exp[expIdx]&&_exp[expIdx].chipType===1)?15:7;
@@ -453,7 +453,9 @@ function mkRow(i,d){
   +'<div class="form-row" style="margin-top:4px">'
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_invert" '+inv+'> Aktiv-LOW (invertiert)</label></div>'
   +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label>'
-  +'<input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div></div>'
+  +'<input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div>'
+  +'<div class="form-col"><label title="Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Dieser Wert wird nur bei automatischer Plan-Ausführung zur Laufzeit addiert.">Schlauch-/Vorlaufzeit (s) <span title="Beispiel: 30s geplante Bewässerung + 12s Vorlauf = 42s Pumpenlaufzeit.">ⓘ</span></label>'
+  +'<input type="number" name="p'+i+'_leadTime" value="'+lt+'" min="0" max="3600"></div></div>'
   +'<label>Notizen</label><input type="text" name="p'+i+'_notes" value="'+nt+'" maxlength="63">'
   +'<div style="margin-top:8px">'
   +'<button type="button" onclick="testRelay('+i+',\'on\')" style="margin-right:4px;padding:5px 14px;background:#1a6b3c;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9654; Test EIN</button>'
@@ -463,7 +465,7 @@ function mkRow(i,d){
 }
 function addPump(){
   var i=_nextPumpIdx++;
-  document.getElementById('pumpRows').insertAdjacentHTML('beforeend',mkRow(i,{pin:-1,maxRuntimeSec:300,enabled:true}));
+  document.getElementById('pumpRows').insertAdjacentHTML('beforeend',mkRow(i,{pin:-1,maxRuntimeSec:300,leadTimeSec:0,enabled:true}));
   document.getElementById('pumpCount').value=_nextPumpIdx;
   document.getElementById('noPumpsMsg').style.display='none';
 }
@@ -490,7 +492,7 @@ function onDisplayModeChange(v){
 )rawhtml";
 
 // ─── Watering Config Page ─────────────────────────────────────────────────────
-// Tokens: {watering_status} {pumpCount} {pump_names_json} {slotCount} {slot_names_json}
+// Tokens: {watering_status} {automation_lock_html} {pumpCount} {pump_names_json} {slotCount} {slot_names_json}
 //         {weatherTemplateCount} {weather_template_names_json}
 //         {slot_rows_html} {weather_template_rows_html} {assignCount}
 //         {assignment_rows_html} {pump_assignment_overview_html}
@@ -499,6 +501,7 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#128167; Bew&#228;sserungsplan</h1>
   {watering_status}
+  {automation_lock_html}
   <div class="alert-info">
     &#128161; <b>1) Slots</b> definieren nur Zeit und Wiederholung.<br>
     <b>2) Wetter-Templates</b> enthalten mehrere Wetterregeln pro Vorlage.<br>
@@ -506,6 +509,17 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
     <span title="Wichtig für kombinierte Regeln: Erst werden Aussetzen-Regeln geprüft. Nur wenn keine davon greift, werden Verkürzen/Verlängern-Regeln relativ zur Basislaufzeit addiert.">ⓘ Reihenfolge der Wetterlogik</span>: zuerst Aussetzen, danach Laufzeit anpassen.
   </div>
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
+    <div class="config-section" style="margin-top:8px;padding-top:0;border-top:none">
+      <h2 style="color:#1a6b3c">0) Hauptschalter Automatik <span title="Sperrt nur die automatische Plan-Ausführung im Scheduler. Manuelles Schalten auf der Hardware-Seite und Testlauf/Simulation bleiben weiterhin möglich.">ⓘ</span></h2>
+      <div class="hint-text" style="margin-bottom:10px">Temporäre Wartungssperre mit Ablaufzeit, damit der Schalter nicht vergessen wird.</div>
+      <div class="form-row">
+        <div class="form-col"><label title="Nur die automatische Ausführung wird gesperrt."><input type="checkbox" name="automationLockEnabled" id="automationLockEnabled" {automation_lock_checked} onchange="onAutomationLockToggle(this.checked)"> Automatik temporär sperren</label></div>
+        <div class="form-col"><label title="Optional: Dauer ab jetzt in Stunden. Wenn gesetzt, wird daraus automatisch eine Ablaufzeit berechnet.">Dauer (h) <span title="Leer lassen, wenn eine feste Ablaufzeit gewählt wird.">ⓘ</span></label><input type="number" id="automationLockHours" name="automationLockHours" value="" min="1" max="168" oninput="onAutomationLockHoursInput()"></div>
+        <div class="form-col"><label title="Alternativ zur Dauer: feste lokale Ablaufzeit für die Sperre.">Sperre bis (Datum/Uhrzeit)</label><input type="datetime-local" id="automationLockUntil" name="automationLockUntil" value="{automation_lock_until_local}" onchange="onAutomationLockUntilInput()"></div>
+      </div>
+      <div class="hint-text" id="automationLockHint" style="margin-top:6px"></div>
+    </div>
+
     <input type="hidden" id="slotCount" name="slotCount" value="{slotCount}">
     <input type="hidden" id="weatherTemplateCount" name="weatherTemplateCount" value="{weatherTemplateCount}">
     <input type="hidden" id="assignCount" name="assignCount" value="{assignCount}">
@@ -547,7 +561,7 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
     </div>
 
     <div class="config-section">
-      <h2 style="color:#1a6b3c">4) Pumpen &#8594; &#220;bersicht</h2>
+      <h2 style="color:#1a6b3c">4) Slot &#8594; Pumpen &#220;bersicht <span title="So siehst du je Zeitslot direkt darunter die Pumpenliste mit Wetterprofil und Basislaufzeit.">ⓘ</span></h2>
       <div id="pumpSlotOverview">{pump_assignment_overview_html}</div>
     </div>
 
@@ -566,6 +580,34 @@ var _nextSlotIdx={slotCount};
 var _nextWeatherTemplateIdx={weatherTemplateCount};
 var _nextAssignIdx={assignCount};
 var dayL=['Mo','Di','Mi','Do','Fr','Sa','So'];
+function onAutomationLockToggle(checked){
+  var hours=document.getElementById('automationLockHours');
+  var until=document.getElementById('automationLockUntil');
+  if(hours) hours.disabled=!checked;
+  if(until) until.disabled=!checked;
+  updateAutomationLockHint();
+}
+function onAutomationLockHoursInput(){
+  var hours=document.getElementById('automationLockHours');
+  if(hours && hours.value){ var until=document.getElementById('automationLockUntil'); if(until) until.value=''; }
+  updateAutomationLockHint();
+}
+function onAutomationLockUntilInput(){
+  var until=document.getElementById('automationLockUntil');
+  if(until && until.value){ var hours=document.getElementById('automationLockHours'); if(hours) hours.value=''; }
+  updateAutomationLockHint();
+}
+function updateAutomationLockHint(){
+  var hint=document.getElementById('automationLockHint');
+  if(!hint) return;
+  var enabled=(document.getElementById('automationLockEnabled')||{}).checked;
+  var hours=(document.getElementById('automationLockHours')||{}).value||'';
+  var until=(document.getElementById('automationLockUntil')||{}).value||'';
+  if(!enabled){ hint.textContent='Automatik ist aktiv. Keine temporäre Sperre gesetzt.'; return; }
+  if(hours){ hint.textContent='Sperre aktiv: läuft in '+hours+' Stunde(n) automatisch ab.'; return; }
+  if(until){ hint.textContent='Sperre aktiv bis '+until.replace('T',' ')+' (lokale Zeit).'; return; }
+  hint.textContent='Sperre aktiv ohne Ablaufwert: Beim Speichern wird automatisch +4 Stunden gesetzt.';
+}
 function pumpOpts(selIdx){
   if(pumpCount===0) return '<option value="0" disabled>&#x26A0; Keine Pumpen konfiguriert</option>';
   var s='';
@@ -785,6 +827,7 @@ function mkSlot(si,d){
      +'</div></div>';
 }
 function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('weatherTemplateCount').value=_nextWeatherTemplateIdx; document.getElementById('assignCount').value=_nextAssignIdx; }
+onAutomationLockToggle((document.getElementById('automationLockEnabled')||{}).checked);
 </script>
 )rawhtml";
 
@@ -879,11 +922,12 @@ function runSim(){
       +'<p><b>Sonnenaufgang/Sonnenuntergang:</b> '+esc(d.sunrise||'–')+' / '+esc(d.sunset||'–')+'</p>'
       +'<p><b>Wetter:</b> '+esc(d.weatherJustification||'–')+'</p>'
       +'<p><b>Warnungen:</b> '+esc(d.warnings||'–')+'</p>'
+      +'<p><b>Automatik-Hauptschalter:</b> '+(d.automationLockActive?'aktiv (bis '+esc(d.automationLockUntil||'–')+')':'nicht aktiv')+' <span title="Hinweis: Simulation ist trotzdem erlaubt und schaltet keine Hardware.">ⓘ</span></p>'
       +'<p><b>Triggerzeit:</b> '+esc(d.triggerTime||'–')+' | <b>Tag passt:</b> '+(d.dayMatched?'ja':'nein')+' | <b>Minute passt:</b> '+(d.triggerMatched?'ja':'nein')+'</p>'
       +'<p><b>Gesamtdauer:</b> '+esc(d.totalDurationSec||0)+' s</p>';
     if(d.plan && d.plan.length){
-      h+='<table><tr><th>#</th><th>Pumpe</th><th>Aktion</th><th>Laufzeit</th><th>Basis</th><th>Regeln</th><th>Grund</th></tr>';
-      d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(actionLabelDe(p.action))+'</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td><td>'+esc(p.appliedRules||'–')+'</td><td>'+esc(p.reason||'')+' ('+esc(p.policySource||'')+')</td></tr>'; });
+      h+='<table><tr><th>#</th><th>Pumpe</th><th>Aktion</th><th>Bewässerung</th><th>Vorlauf</th><th>Gesamt</th><th>Basis</th><th>Regeln</th><th>Grund</th></tr>';
+      d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(actionLabelDe(p.action))+'</td><td>'+esc(p.plannedDurationSec)+' s</td><td>'+esc(p.leadTimeSec||0)+' s</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td><td>'+esc(p.appliedRules||'–')+'</td><td>'+esc(p.reason||'')+' ('+esc(p.policySource||'')+')</td></tr>'; });
       h+='</table>';
     } else {
       h+='<p style=\"color:#999\">Keine Pumpen-Ausf&#252;hrung geplant.</p>';
