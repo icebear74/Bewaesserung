@@ -742,7 +742,7 @@ static String buildPumpRowHtml(int i, const PumpEntry& p, const HardwareConfig& 
     r += "<div class=\"form-col\"><label>Max. Test-Laufzeit (s)</label>";
     r += "<input type=\"number\" name=\"p"; r += i; r += "_maxRuntime\" value=\"";
     r += p.maxRuntimeSec; r += "\" min=\"1\" max=\"3600\"></div>";
-    r += "<div class=\"form-col\"><label title=\"Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Wird zur automatischen Laufzeit addiert.\">Schlauch-/Vorlaufzeit (s) <span title=\"Beispiel: 30s geplant + 12s Vorlauf = 42s Gesamtlaufzeit.\">ⓘ</span></label>";
+    r += "<div class=\"form-col\"><label title=\"Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Wird zur geplanten Pumpenlaufzeit addiert.\">Schlauch-/Vorlaufzeit (s) <span title=\"Beispiel: 30s geplant + 12s Vorlauf = 42s Gesamtlaufzeit.\">ⓘ</span></label>";
     r += "<input type=\"number\" name=\"p"; r += i; r += "_leadTime\" value=\"";
     r += p.leadTimeSec; r += "\" min=\"0\" max=\"3600\"></div></div>";
     r += "<label>Notizen</label><input type=\"text\" name=\"p"; r += i; r += "_notes\" value=\"";
@@ -1653,7 +1653,7 @@ static void handleSaveWatering() {
     newSc.automationLockUntil = 0;
     if (newSc.automationLockEnabled) {
         int lockHours = g_server->hasArg("automationLockHours")
-                            ? constrain(g_server->arg("automationLockHours").toInt(), 0, 24 * 30)
+                            ? constrain(g_server->arg("automationLockHours").toInt(), 0, 168)
                             : 0;
         if (lockHours > 0) {
             time_t nowLocal = time(nullptr);

@@ -493,6 +493,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         if (!input.hardwareConfig->pumps[p.pumpIndex].enabled) {
             p.action = WATER_ACTION_SKIP;
             p.plannedDurationSec = 0;
+            p.leadTimeSec = 0;
             p.durationSec = 0;
             setText(p.reason, sizeof(p.reason), "Pumpe ist deaktiviert.");
             skippedCount++;
@@ -551,6 +552,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
             if (skipMatched) {
                 p.action = WATER_ACTION_SKIP;
                 p.plannedDurationSec = 0;
+                p.leadTimeSec = 0;
                 p.durationSec = 0;
                 if (matchedSkipCount == 1) {
                     setText(p.reason, sizeof(p.reason), "Ausgesetzt durch Wetterregel.");

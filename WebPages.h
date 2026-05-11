@@ -454,7 +454,7 @@ function mkRow(i,d){
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_invert" '+inv+'> Aktiv-LOW (invertiert)</label></div>'
   +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label>'
   +'<input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div>'
-  +'<div class="form-col"><label title="Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Dieser Wert wird nur bei automatischer Plan-Ausführung zur Laufzeit addiert.">Schlauch-/Vorlaufzeit (s) <span title="Beispiel: 30s geplante Bewässerung + 12s Vorlauf = 42s Pumpenlaufzeit.">ⓘ</span></label>'
+  +'<div class="form-col"><label title="Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Dieser Wert wird zur geplanten Pumpenlaufzeit addiert.">Schlauch-/Vorlaufzeit (s) <span title="Beispiel: 30s geplante Bewässerung + 12s Vorlauf = 42s Pumpenlaufzeit.">ⓘ</span></label>'
   +'<input type="number" name="p'+i+'_leadTime" value="'+lt+'" min="0" max="3600"></div></div>'
   +'<label>Notizen</label><input type="text" name="p'+i+'_notes" value="'+nt+'" maxlength="63">'
   +'<div style="margin-top:8px">'
