@@ -645,7 +645,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                     p.leadTimeSec = 0;
                     p.durationSec = 0;
                     setText(p.reason, sizeof(p.reason),
-                            "Ausgesetzt: Pumpen-Maximalzeit ist kleiner/gleich Vorlaufzeit.");
+                            "Ausgesetzt: Pumpen-Maximalzeit ist kleiner oder gleich der Vorlaufzeit.");
                     appendText(p.appliedRules, sizeof(p.appliedRules), "Maximalzeit <= Vorlaufzeit");
                     appendText(out.warnings, sizeof(out.warnings),
                                "Konfiguration prüfen: Maximalzeit <= Vorlaufzeit.", " | ");

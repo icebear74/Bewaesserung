@@ -1059,6 +1059,7 @@ static void handleRelayTest() {
             msg = "Keine laufende Messung gefunden.";
         } else {
             unsigned long elapsedMs = millis() - startMs;
+            // Round milliseconds to nearest whole second for lead-time adoption.
             int measuredSec = (int)((elapsedMs + 500UL) / 1000UL);
             if (measuredSec < 0) measuredSec = 0;
             measuredSec = constrain(measuredSec, 0, 3600);
@@ -1145,7 +1146,8 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += String(summaryBuf);
     r += " | ";
     r += describeRepeatRule(slot);
-    if (slot.lockEnabled && slot.lockUntil > 0) {
+    time_t nowForLock = time(nullptr);
+    if (slot.lockEnabled && slot.lockUntil > 0 && nowForLock > 0 && nowForLock < slot.lockUntil) {
         r += " | <span style='color:#b26a00'>Slot gesperrt bis ";
         r += formatDateTimeLocal(slot.lockUntil);
         r += "</span>";

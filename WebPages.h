@@ -604,7 +604,7 @@ function pumpOpts(selIdx){
   for(var i=0;i<pumpCount;i++) list.push({idx:i,name:(pumpNames[i]||('Pumpe '+(i+1)))});
   list.sort(function(a,b){return a.name.localeCompare(b.name,'de');});
   var s='';
-  for(var k=0;k<list.length;k++) s+='<option value="'+list[k].idx+'"'+(list[k].idx===selIdx?' selected':'')+'>'+list[k].name+'</option>';
+  for(var listIdx=0;listIdx<list.length;listIdx++) s+='<option value="'+list[listIdx].idx+'"'+(list[listIdx].idx===selIdx?' selected':'')+'>'+list[listIdx].name+'</option>';
   return s;
 }
 function slotOpts(selIdx){
