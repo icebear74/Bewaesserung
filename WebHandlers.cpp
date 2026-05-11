@@ -1658,7 +1658,7 @@ static void handleSaveWatering() {
         if (lockHours > 0) {
             time_t nowLocal = time(nullptr);
             if (nowLocal > 0) {
-                newSc.automationLockUntil = nowLocal + (time_t)lockHours * 3600;
+                newSc.automationLockUntil = nowLocal + ((time_t)lockHours * 3600);
             }
         } else if (g_server->hasArg("automationLockUntil")) {
             newSc.automationLockUntil = parseLocalDateTimeArg(g_server->arg("automationLockUntil"));
@@ -1916,7 +1916,8 @@ static String formatDateTimeLocalInput(time_t ts) {
 
 static String formatRemainingDuration(time_t remainingSec) {
     if (remainingSec <= 0) return "0m";
-    long totalMin = (long)((remainingSec + 59) / 60);
+    if (remainingSec < 60) return "<1m";
+    long totalMin = (long)(remainingSec / 60);
     long d = totalMin / (24 * 60);
     long h = (totalMin % (24 * 60)) / 60;
     long m = totalMin % 60;

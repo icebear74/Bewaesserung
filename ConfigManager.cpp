@@ -653,7 +653,7 @@ bool ConfigManager::isAutomationLocked(time_t nowLocal) const {
     if (!_slotConfig.automationLockEnabled) return false;
     if (_slotConfig.automationLockUntil <= 0) return false;
     if (nowLocal <= 0) nowLocal = time(nullptr);
-    if (nowLocal <= 0) return true;
+    if (nowLocal <= 0) return false;
     return nowLocal < _slotConfig.automationLockUntil;
 }
 

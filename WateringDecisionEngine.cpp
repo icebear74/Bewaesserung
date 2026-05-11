@@ -613,7 +613,17 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
             if (pumpMaxRuntime > 0 && p.durationSec > pumpMaxRuntime) {
                 p.durationSec = pumpMaxRuntime;
                 int adjustedPlanned = p.durationSec - p.leadTimeSec;
-                if (adjustedPlanned < 1) adjustedPlanned = 1;
+                if (adjustedPlanned <= 0) {
+                    p.action = WATER_ACTION_SKIP;
+                    p.plannedDurationSec = 0;
+                    p.leadTimeSec = 0;
+                    p.durationSec = 0;
+                    setText(p.reason, sizeof(p.reason),
+                            "Ausgesetzt: Pumpen-Maximalzeit ist kleiner/gleich Vorlaufzeit.");
+                    appendText(p.appliedRules, sizeof(p.appliedRules), "Maximalzeit <= Vorlaufzeit");
+                    skippedCount++;
+                    continue;
+                }
                 if (adjustedPlanned < p.plannedDurationSec) {
                     p.plannedDurationSec = adjustedPlanned;
                 }
