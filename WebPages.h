@@ -454,7 +454,7 @@ function mkRow(i,d){
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_invert" '+inv+'> Aktiv-LOW (invertiert)</label></div>'
   +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label>'
   +'<input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div>'
-  +'<div class="form-col"><label title="Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Dieser Wert wird zur geplanten Pumpenlaufzeit addiert.">Schlauch-/Vorlaufzeit (s) <span title="Beispiel: 30s geplante Bewässerung + 12s Vorlauf = 42s Pumpenlaufzeit.">ⓘ</span></label>'
+  +'<div class="form-col"><label title="Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Dieser Wert wird zur geplanten Pumpenlaufzeit addiert.">Schlauch-/Vorlaufzeit (s) <span title="Beispiel: 30s geplanten Bewässerung + 12s Vorlauf = 42s Pumpenlaufzeit.">ⓘ</span></label>'
   +'<input type="number" name="p'+i+'_leadTime" value="'+lt+'" min="0" max="3600"></div></div>'
   +'<label>Notizen</label><input type="text" name="p'+i+'_notes" value="'+nt+'" maxlength="63">'
   +'<div style="margin-top:8px">'
@@ -917,7 +917,7 @@ function runSim(){
       +'<p><b>Sonnenaufgang/Sonnenuntergang:</b> '+esc(d.sunrise||'–')+' / '+esc(d.sunset||'–')+'</p>'
       +'<p><b>Wetter:</b> '+esc(d.weatherJustification||'–')+'</p>'
       +'<p><b>Warnungen:</b> '+esc(d.warnings||'–')+'</p>'
-      +'<p><b>Automatik-Hauptschalter:</b> '+(d.automationLockActive?'aktiv (bis '+esc(d.automationLockUntil||'–')+')':'nicht aktiv')+' <span title="Hinweis: Simulation ist trotzdem erlaubt und schaltet keine Hardware.">ⓘ</span></p>'
+      +'<p><b>Automatik-Hauptschalter:</b> '+(d.automationLockActive?'GESPERRT (bis '+esc(d.automationLockUntil||'–')+')':'nicht gesperrt')+' <span title="Hinweis: Simulation ist trotzdem erlaubt und schaltet keine Hardware.">ⓘ</span></p>'
       +'<p><b>Triggerzeit:</b> '+esc(d.triggerTime||'–')+' | <b>Tag passt:</b> '+(d.dayMatched?'ja':'nein')+' | <b>Minute passt:</b> '+(d.triggerMatched?'ja':'nein')+'</p>'
       +'<p><b>Gesamtdauer:</b> '+esc(d.totalDurationSec||0)+' s</p>';
     if(d.plan && d.plan.length){

@@ -623,7 +623,13 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
             int pumpMaxRuntime = input.hardwareConfig->pumps[p.pumpIndex].maxRuntimeSec;
             p.durationSec = p.plannedDurationSec + p.leadTimeSec;
             if (pumpMaxRuntime > 0 && p.durationSec > pumpMaxRuntime) {
+                int requestedTotal = p.durationSec;
                 p.durationSec = pumpMaxRuntime;
+                char maxWarn[160];
+                snprintf(maxWarn, sizeof(maxWarn),
+                         "Pumpe %u: Gesamtlaufzeit %ds überschreitet Maximum %ds.",
+                         (unsigned)(p.pumpIndex + 1), requestedTotal, pumpMaxRuntime);
+                appendText(out.warnings, sizeof(out.warnings), maxWarn, " | ");
                 int adjustedPlanned = p.durationSec - p.leadTimeSec;
                 if (adjustedPlanned <= 0) {
                     p.action = WATER_ACTION_SKIP;
@@ -633,6 +639,8 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                     setText(p.reason, sizeof(p.reason),
                             "Ausgesetzt: Pumpen-Maximalzeit ist kleiner/gleich Vorlaufzeit.");
                     appendText(p.appliedRules, sizeof(p.appliedRules), "Maximalzeit <= Vorlaufzeit");
+                    appendText(out.warnings, sizeof(out.warnings),
+                               "Konfiguration prüfen: Maximalzeit <= Vorlaufzeit.", " | ");
                     skippedCount++;
                     continue;
                 }
@@ -640,6 +648,8 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                     p.plannedDurationSec = adjustedPlanned;
                 }
                 appendText(p.appliedRules, sizeof(p.appliedRules), "Auf Pumpen-Maximalzeit begrenzt");
+                appendText(p.reason, sizeof(p.reason),
+                           "Warnung: Gesamtlaufzeit wurde auf Pumpen-Maximalzeit begrenzt.", " ");
             }
             runnableCount++;
             out.totalDurationSec += p.durationSec;

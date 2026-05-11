@@ -471,7 +471,10 @@ static void handleStatus() {
                     fallbackActive = nextInfo2->result.usedFallbackTime;
                     nextSlotPlanHtml = "";
                     if (nextInfo2->result.planCount > 0) {
-                        String slotBg = automationLocked ? "#ffe5e5" : "#ffffff";
+                        bool slotHasRuntimeWarning =
+                            strstr(nextInfo2->result.warnings, "Gesamtlaufzeit") != nullptr ||
+                            strstr(nextInfo2->result.warnings, "Maximalzeit") != nullptr;
+                        String slotBg = automationLocked ? "#ffe5e5" : (slotHasRuntimeWarning ? "#fff7cc" : "#ffffff");
                         nextSlotPlanHtml += "<div style='margin-top:8px;background:" + slotBg + ";padding:8px;border-radius:6px'><b>Slot-Übersicht:</b><div class='table-wrap'><table class='compact-table'>"
                                             "<tr><th>Pumpe</th><th>Wetterprofil</th><th>Status</th><th>Laufzeit</th><th>Grund</th></tr>";
                         bool usedPlan[MAX_SLOT_ASSIGNMENTS] = {false};
@@ -500,6 +503,10 @@ static void handleStatus() {
                             nextSlotPlanHtml += "<td>" + String(p.reason) + "</td></tr>";
                         }
                         nextSlotPlanHtml += "</table></div></div>";
+                        if (slotHasRuntimeWarning) {
+                            nextSlotPlanHtml += "<div style='margin-top:6px;color:#8a6d00'><b>⚠ Warnhinweis:</b> "
+                                             + String(nextInfo2->result.warnings) + "</div>";
+                        }
                     }
                 }
             }
