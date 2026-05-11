@@ -460,6 +460,8 @@ function mkRow(i,d){
   +'<div style="margin-top:8px">'
   +'<button type="button" onclick="testRelay('+i+',\'on\')" style="margin-right:4px;padding:5px 14px;background:#1a6b3c;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9654; Test EIN</button>'
   +'<button type="button" onclick="testRelay('+i+',\'off\')" style="padding:5px 14px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">&#9646; Test AUS</button>'
+  +'<button type="button" onclick="testRelay('+i+',\'measure_start\')" style="margin-left:4px;padding:5px 14px;background:#0b7285;color:#fff;border:none;border-radius:4px;cursor:pointer">⏱ Vorlauf messen START</button>'
+  +'<button type="button" onclick="testRelay('+i+',\'measure_stop\')" style="margin-left:4px;padding:5px 14px;background:#495057;color:#fff;border:none;border-radius:4px;cursor:pointer">✔ Vorlauf messen STOP</button>'
   +' <span id="ts'+i+'" style="font-size:12px;color:#555"></span>'
   +'</div></div>';
 }
@@ -492,7 +494,7 @@ function onDisplayModeChange(v){
 )rawhtml";
 
 // ─── Watering Config Page ─────────────────────────────────────────────────────
-// Tokens: {watering_status} {automation_lock_html} {pumpCount} {pump_names_json} {slotCount} {slot_names_json}
+// Tokens: {watering_status} {automation_lock_html} {automation_lock_hours} {pumpCount} {pump_names_json} {slotCount} {slot_names_json}
 //         {weatherTemplateCount} {weather_template_names_json}
 //         {slot_rows_html} {weather_template_rows_html} {assignCount}
 //         {assignment_rows_html} {pump_assignment_overview_html}
@@ -514,8 +516,7 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
       <div class="hint-text" style="margin-bottom:10px">Temporäre Wartungssperre mit Ablaufzeit, damit der Schalter nicht vergessen wird.</div>
       <div class="form-row">
         <div class="form-col"><label title="Nur die automatische Ausführung wird gesperrt."><input type="checkbox" name="automationLockEnabled" id="automationLockEnabled" {automation_lock_checked} onchange="onAutomationLockToggle(this.checked)"> Automatik temporär sperren</label></div>
-        <div class="form-col"><label title="Optional: Dauer ab jetzt in Stunden. Wenn gesetzt, wird daraus automatisch eine Ablaufzeit berechnet.">Dauer (h) <span title="Leer lassen, wenn eine feste Ablaufzeit gewählt wird.">ⓘ</span></label><input type="number" id="automationLockHours" name="automationLockHours" value="" min="1" max="168" oninput="onAutomationLockHoursInput()"></div>
-        <div class="form-col"><label title="Alternativ zur Dauer: feste lokale Ablaufzeit für die Sperre.">Sperre bis (Datum/Uhrzeit)</label><input type="datetime-local" id="automationLockUntil" name="automationLockUntil" value="{automation_lock_until_local}" onchange="onAutomationLockUntilInput()"></div>
+        <div class="form-col"><label title="Dauer ab jetzt in Stunden. Beim Speichern wird die Sperre automatisch bis jetzt + Stunden gesetzt.">Dauer (h)</label><input type="number" id="automationLockHours" name="automationLockHours" value="{automation_lock_hours}" min="1" max="168" oninput="onAutomationLockHoursInput()"></div>
       </div>
       <div class="hint-text" id="automationLockHint" style="margin-top:6px"></div>
     </div>
@@ -582,19 +583,10 @@ var _nextAssignIdx={assignCount};
 var dayL=['Mo','Di','Mi','Do','Fr','Sa','So'];
 function onAutomationLockToggle(checked){
   var hours=document.getElementById('automationLockHours');
-  var until=document.getElementById('automationLockUntil');
   if(hours) hours.disabled=!checked;
-  if(until) until.disabled=!checked;
   updateAutomationLockHint();
 }
 function onAutomationLockHoursInput(){
-  var hours=document.getElementById('automationLockHours');
-  if(hours && hours.value){ var until=document.getElementById('automationLockUntil'); if(until) until.value=''; }
-  updateAutomationLockHint();
-}
-function onAutomationLockUntilInput(){
-  var until=document.getElementById('automationLockUntil');
-  if(until && until.value){ var hours=document.getElementById('automationLockHours'); if(hours) hours.value=''; }
   updateAutomationLockHint();
 }
 function updateAutomationLockHint(){
@@ -602,16 +594,17 @@ function updateAutomationLockHint(){
   if(!hint) return;
   var enabled=(document.getElementById('automationLockEnabled')||{}).checked;
   var hours=(document.getElementById('automationLockHours')||{}).value||'';
-  var until=(document.getElementById('automationLockUntil')||{}).value||'';
   if(!enabled){ hint.textContent='Automatik ist aktiv. Keine temporäre Sperre gesetzt.'; return; }
   if(hours){ hint.textContent='Sperre aktiv: läuft in '+hours+' Stunde(n) automatisch ab.'; return; }
-  if(until){ hint.textContent='Sperre aktiv bis '+until.replace('T',' ')+' (lokale Zeit).'; return; }
-  hint.textContent='Sperre aktiv ohne Ablaufwert: Beim Speichern wird automatisch +4 Stunden gesetzt.';
+  hint.textContent='Sperre aktiv ohne Angabe: Beim Speichern werden standardmäßig 24 Stunden gesetzt.';
 }
 function pumpOpts(selIdx){
   if(pumpCount===0) return '<option value="0" disabled>&#x26A0; Keine Pumpen konfiguriert</option>';
+  var list=[];
+  for(var i=0;i<pumpCount;i++) list.push({idx:i,name:(pumpNames[i]||('Pumpe '+(i+1)))});
+  list.sort(function(a,b){return a.name.localeCompare(b.name,'de');});
   var s='';
-  for(var i=0;i<pumpCount;i++) s+='<option value="'+i+'"'+(i===selIdx?' selected':'')+'>'+(pumpNames[i]||('Pumpe '+(i+1)))+'</option>';
+  for(var k=0;k<list.length;k++) s+='<option value="'+list[k].idx+'"'+(list[k].idx===selIdx?' selected':'')+'>'+list[k].name+'</option>';
   return s;
 }
 function slotOpts(selIdx){
@@ -811,6 +804,7 @@ function mkSlot(si,d){
   var timVal=(hr<10?'0':'')+hr+':'+(mn<10?'0':'')+mn;
   var offMin=d.offsetMinutes||0, offBase=d.offsetBase||0, days=d.days!=null?d.days:0x7F;
   var repeatMode=d.repeatMode!=null?d.repeatMode:0, intervalDays=d.intervalDays||1, intervalAnchor=d.intervalAnchor||'';
+  var lockEn=d.lockEnabled?'checked':'', lockHours=d.lockHours||24;
   var daysHtml=''; for(var dd=0;dd<7;dd++){var c=(days&(1<<dd))?'checked':''; daysHtml+='<label style=\"margin-right:7px\"><input type=\"checkbox\" name=\"s'+si+'_d'+dd+'\" '+c+'> '+dayL[dd]+'</label>';}
   var trNames=['Feste Uhrzeit','Sonnenaufgang','Sonnenuntergang','Mittagszeit','Offset (relativ zu Referenz)'], trOpts=''; for(var t=0;t<5;t++) trOpts+='<option value=\"'+t+'\"'+(tr===t?' selected':'')+'>'+trNames[t]+'</option>';
   var repNames=['Wochentage','Intervall (alle N Tage)'], repOpts=''; for(var r=0;r<2;r++) repOpts+='<option value=\"'+r+'\"'+(repeatMode===r?' selected':'')+'>'+repNames[r]+'</option>';
@@ -824,6 +818,7 @@ function mkSlot(si,d){
     +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Wochentage = feste Tage. Intervall = alle N Tage ab dem Ankerdatum.\">Wiederholung</label><select name=\"s'+si+'_repeatMode\" onchange=\"onRepeatModeChange('+si+',this.value)\">'+repOpts+'</select></div></div>'
     +'<div id=\"daysRow'+si+'\" style=\"display:'+(repeatMode===1?'none':'block')+';margin-top:6px\">'+daysHtml+'</div>'
      +'<div id=\"intervalRow'+si+'\" style=\"display:'+(repeatMode===1?'flex':'none')+'\" class=\"form-row\"><div class=\"form-col\"><label title=\"Beispiel: 3 bedeutet alle drei Tage.\">Alle N Tage</label><input type=\"number\" name=\"s'+si+'_intervalDays\" value=\"'+intervalDays+'\" min=\"1\" max=\"90\"></div><div class=\"form-col\"><label title=\"Ab diesem Datum wird das Intervall gezählt.\">Startdatum (Anker)</label><input type=\"date\" name=\"s'+si+'_intervalAnchor\" value=\"'+intervalAnchor+'\"></div></div>'
+     +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Sperrt nur diesen Slot temporär. Andere Slots laufen normal.\"><input type=\"checkbox\" name=\"s'+si+'_lockEnabled\" '+lockEn+'> Slot temporär sperren</label></div><div class=\"form-col\"><label title=\"Dauer ab jetzt in Stunden für diese Slot-Sperre.\">Sperrdauer (h)</label><input type=\"number\" name=\"s'+si+'_lockHours\" value=\"'+lockHours+'\" min=\"1\" max=\"168\"></div></div>'
      +'</div></div>';
 }
 function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('weatherTemplateCount').value=_nextWeatherTemplateIdx; document.getElementById('assignCount').value=_nextAssignIdx; }

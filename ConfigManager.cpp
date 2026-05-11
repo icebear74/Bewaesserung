@@ -421,6 +421,8 @@ bool ConfigManager::loadSlotConfig() {
             s.days            = (uint8_t)(so["days"] | 0x7F);
             s.intervalDays    = (uint8_t)constrain((int)(so["intervalDays"] | 1), 1, 90);
             s.intervalAnchorDay = (uint16_t)constrain((int)(so["intervalAnchorDay"] | 0), 0, 65535);
+            s.lockEnabled     = so["lockEnabled"] | false;
+            s.lockUntil       = (time_t)((long)(so["lockUntil"] | 0L));
             s.skipIfRainMm    = so["skipIfRainMm"]   | 0.0f;
             s.skipIfRainPct   = so["skipIfRainPct"]  | 0.0f;
             s.runOnlyAboveTemp= so["runOnlyAboveTemp"]| -99.0f;
@@ -597,6 +599,8 @@ bool ConfigManager::saveSlotConfig() {
         so["days"]           = s.days;
         so["intervalDays"]   = s.intervalDays;
         so["intervalAnchorDay"] = s.intervalAnchorDay;
+        so["lockEnabled"]    = s.lockEnabled;
+        so["lockUntil"]      = (long)s.lockUntil;
         so["skipIfRainMm"]   = s.skipIfRainMm;
         so["skipIfRainPct"]  = s.skipIfRainPct;
         so["runOnlyAboveTemp"] = s.runOnlyAboveTemp;

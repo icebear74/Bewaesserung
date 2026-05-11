@@ -417,6 +417,18 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         return;
     }
 
+    if (slot.lockEnabled && slot.lockUntil > 0 && input.nowLocal < slot.lockUntil) {
+        char untilBuf[32];
+        struct tm lockTm;
+        localtime_r(&slot.lockUntil, &lockTm);
+        snprintf(untilBuf, sizeof(untilBuf), "%02d.%02d %02d:%02d",
+                 lockTm.tm_mday, lockTm.tm_mon + 1, lockTm.tm_hour, lockTm.tm_min);
+        snprintf(out.reason, sizeof(out.reason),
+                 "Slot temporär gesperrt bis %s.", untilBuf);
+        out.action = WATER_ACTION_SKIP;
+        return;
+    }
+
     out.dayMatched = dayMatches(slot, input.nowLocal);
     if (input.enforceDayMatch && !out.dayMatched) {
         if (slot.repeatMode == REPEAT_INTERVAL_DAYS) {

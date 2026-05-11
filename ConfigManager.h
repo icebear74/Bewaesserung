@@ -106,6 +106,8 @@ struct WateringSlot {
     uint8_t days              = 0x7F;  // bitmask bit0=Mon … bit6=Sun (default all days)
     uint8_t intervalDays      = 1;     // every N days (REPEAT_INTERVAL_DAYS)
     uint16_t intervalAnchorDay = 0;    // epoch-day anchor for interval mode (local)
+    bool    lockEnabled       = false; // temporary slot lock
+    time_t  lockUntil         = 0;     // local epoch; active while now < lockUntil
 
     // Legacy slot-level weather policy (kept for backward compatibility).
     // New configs should use assignment-level weather policy.
