@@ -17,9 +17,10 @@ fi
 
 major="${BASH_REMATCH[1]}"
 minor="${BASH_REMATCH[2]}"
+patch="${BASH_REMATCH[3]}"
 
-next_minor=$((minor + 1))
-next_version="${major}.${next_minor}.0"
+next_patch=$((patch + 1))
+next_version="${major}.${minor}.${next_patch}"
 echo "${next_version}" > "${VERSION_FILE}"
 
 git_hash="nogit"

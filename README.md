@@ -96,8 +96,8 @@ src/
 - Firmware-Metadaten werden in `Version.hpp` eingebettet (`kBaseVersion`, `kFullVersion`, `kGitHash`, `kBuildDate`).
 - Das Skript `./write_version.sh` ist die Quelle für die Version:
   - liest `VERSION` (`MAJOR.MINOR.PATCH`)
-  - erhöht bei **jedem Aufruf automatisch die MINOR-Version**
-  - setzt PATCH dabei auf `0`
+  - erhöht bei **jedem Aufruf automatisch nur die PATCH-Version**
+  - lässt MAJOR und MINOR unverändert
   - schreibt anschließend `VERSION` und `Version.hpp` neu
 - Beispiel:
 
