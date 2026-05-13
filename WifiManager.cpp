@@ -3,7 +3,9 @@
 #include <vector>
 #include <algorithm>
 
-// WPS config for Push-Button mode
+// Minimum epoch value considered valid (approx. Jan 12, 1970 – filters out
+// uninitialized time values when NTP has not yet synced).
+static constexpr time_t MIN_VALID_EPOCH = 1000000L;
 static esp_wps_config_t wps_config = WPS_CONFIG_INIT_DEFAULT(WPS_TYPE_PBC);
 // File-scope WPS state flags (safe for use inside WiFi event callbacks)
 static volatile bool s_wpsSuccess = false;
@@ -166,7 +168,7 @@ bool WifiManager::connectMultiAP(DeviceConfig& config) {
             _localIP   = WiFi.localIP().toString();
             _ssid      = String(config.ssid);
             time_t t = time(nullptr);
-            _connectedSinceEpoch = (t > 1000000L) ? t : 0;
+            _connectedSinceEpoch = (t > MIN_VALID_EPOCH) ? t : 0;
             WiFi.setHostname(config.hostname);
             Serial.printf("[WiFi] Connected! IP: %s\n", _localIP.c_str());
             return true;
@@ -231,7 +233,7 @@ bool WifiManager::tryWPS() {
             _localIP   = WiFi.localIP().toString();
             _ssid      = WiFi.SSID();
             time_t t = time(nullptr);
-            _connectedSinceEpoch = (t > 1000000L) ? t : 0;
+            _connectedSinceEpoch = (t > MIN_VALID_EPOCH) ? t : 0;
             Serial.printf("[WiFi] WPS connected. IP: %s\n", _localIP.c_str());
             return true;
         }

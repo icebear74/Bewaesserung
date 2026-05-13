@@ -75,7 +75,7 @@ void WateringRunLog::append(time_t ts, const char* slotName, const char* pumpNam
 
 void WateringRunLog::fillLastStartTimes(const char* const* pumpNames, time_t* results, int count) const {
     for (int i = 0; i < count; i++) results[i] = 0;
-    if (count <= 0 || !LittleFS.exists(RUNLOG_FILE)) return;
+    if (count <= 0 || count > MAX_RELAY_COUNT || !LittleFS.exists(RUNLOG_FILE)) return;
 
     File f = LittleFS.open(RUNLOG_FILE, "r");
     if (!f) return;
