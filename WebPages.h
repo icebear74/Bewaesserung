@@ -78,6 +78,7 @@ const char HTML_FOOTER[] PROGMEM = R"rawhtml(
 //               {ip_address} {time_str} {uptime} {state_str}
 //               {ds3231_status} {offline_mode} {rtc_temp}
 //               {pump_status_html} {weather_html}
+//               {firmware_version} {firmware_build_date} {firmware_git_hash}
 
 const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
@@ -96,6 +97,9 @@ const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
         <tr><td>DS3231 RTC</td><td>{ds3231_status}</td></tr>
         <tr><td>RTC Temperatur</td><td>{rtc_temp}</td></tr>
         <tr><td>Offline-Modus</td><td>{offline_mode}</td></tr>
+        <tr><td>Firmware</td><td>{firmware_version}</td></tr>
+        <tr><td>Build-Datum</td><td>{firmware_build_date}</td></tr>
+        <tr><td>Git-Hash</td><td>{firmware_git_hash}</td></tr>
       </table>
     </div>
     <div class="status-panel">
@@ -268,7 +272,7 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
   <h1>&#9881;&#65039; Hardware-Konfiguration</h1>
   <div class="alert-info">
     &#128161; &#196;nderungen werden sofort &#252;bernommen (kein Neustart erforderlich).
-    Test-Buttons aktivieren die Pumpe kurzzeitig.
+    Test-Buttons aktivieren den Kanal kurzzeitig.
   </div>
   <form method="POST" action="/save_hardware" id="hwForm">
 
@@ -278,7 +282,7 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
     <div class="alert-info" style="margin-bottom:8px">
       <b>OLED (SSD1306, I2C)</b> und <b>TFT (ST7735, SPI)</b> k&#246;nnen einzeln oder
       gemeinsam betrieben werden. Der TFT zeigt im Querformat zus&#228;tzlich den
-      Pumpen-Status als farbige Badges an.
+      Kanal-Status als farbige Badges an.
     </div>
     <div class="form-row">
       <div class="form-col">
@@ -317,7 +321,7 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
     </h2>
     <div class="alert-info" style="margin-bottom:8px">
       Hier werden I2C GPIO-Expander-Chips definiert (PCF8574 / PCF8575).
-      Pumpen k&#246;nnen einen dieser Expander als Ausgangstyp verwenden.
+      Kan&#228;le k&#246;nnen einen dieser Expander als Ausgangstyp verwenden.
     </div>
     <label for="expCount">Anzahl Expander (0&#x2013;4)</label>
     <input type="number" id="expCount" name="expCount" value="{expanderCount}"
@@ -325,15 +329,15 @@ const char HTML_HARDWARE_PAGE[] PROGMEM = R"rawhtml(
     <div id="expanderRows">{expander_rows_html}</div>
 
     <h2 style="margin-top:22px;margin-bottom:6px;font-size:1.05em;color:#1a6b3c">
-      &#128167; Pumpen
+      &#128167; Kan&#228;le
     </h2>
     <input type="hidden" id="pumpCount" name="pumpCount" value="{pumpCount}">
     <div id="pumpRows">{pump_rows_html}</div>
     <div id="noPumpsMsg" style="display:{noPumpsMsg};color:#999;font-style:italic;margin-bottom:8px">
-      Noch keine Pumpe angelegt. Pumpe hinzuf&#252;gen &#8594;
+      Noch kein Kanal angelegt. Kanal hinzuf&#252;gen &#8594;
     </div>
     <button type="button" class="btn" onclick="addPump()"
-            style="margin-bottom:14px;background:#17a2b8">+ Pumpe hinzuf&#252;gen</button>
+            style="margin-bottom:14px;background:#17a2b8">+ Kanal hinzuf&#252;gen</button>
 
     <div style="margin-top:14px">
       <button class="btn" type="submit">&#128190; Speichern</button>
@@ -428,7 +432,7 @@ function mkRow(i,d){
   var i2cDisp=t===1?'block':'none';
   return '<div class="pump-entry" id="prow'+i+'" style="border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px">'
   +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-  +'<b>Pumpe #'+(i+1)+'</b>'
+  +'<b>Kanal #'+(i+1)+'</b>'
   +'<button type="button" onclick="deletePump('+i+')" '
   +'style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer">'
   +'&#10005; L&#246;schen</button></div>'
@@ -454,7 +458,7 @@ function mkRow(i,d){
   +'<div class="form-col"><label><input type="checkbox" name="p'+i+'_invert" '+inv+'> Aktiv-LOW (invertiert)</label></div>'
   +'<div class="form-col"><label>Max. Test-Laufzeit (s)</label>'
   +'<input type="number" name="p'+i+'_maxRuntime" value="'+mr+'" min="1" max="3600"></div>'
-  +'<div class="form-col"><label title="Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Dieser Wert wird zur geplanten Pumpenlaufzeit addiert.">Schlauch-/Vorlaufzeit (s) <span title="Beispiel: 30s geplanten Bewässerung + 12s Vorlauf = 42s Pumpenlaufzeit.">ⓘ</span></label>'
+  +'<div class="form-col"><label title="Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Dieser Wert wird zur geplanten Kanallaufzeit addiert.">Schlauch-/Vorlaufzeit (s) <span title="Beispiel: 30s geplanten Bewässerung + 12s Vorlauf = 42s Kanallaufzeit.">ⓘ</span></label>'
   +'<input type="number" name="p'+i+'_leadTime" value="'+lt+'" min="0" max="3600"></div></div>'
   +'<label>Notizen</label><input type="text" name="p'+i+'_notes" value="'+nt+'" maxlength="63">'
   +'<div style="margin-top:8px">'
@@ -507,7 +511,7 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
   <div class="alert-info">
     &#128161; <b>1) Slots</b> definieren nur Zeit und Wiederholung.<br>
     <b>2) Wetter-Templates</b> enthalten mehrere Wetterregeln pro Vorlage.<br>
-    <b>3) Pumpen-Zuweisungen</b> verbinden Slot + Wetter-Template (oder kein Template) + Pumpe.<br>
+    <b>3) Kanal-Zuweisungen</b> verbinden Slot + Wetter-Template (oder kein Template) + Kanal.<br>
     <span title="Wichtig für kombinierte Regeln: Erst werden Aussetzen-Regeln geprüft. Nur wenn keine davon greift, werden Verkürzen/Verlängern-Regeln relativ zur Basislaufzeit addiert.">ⓘ Reihenfolge der Wetterlogik</span>: zuerst Aussetzen, danach Laufzeit anpassen.
   </div>
   <form method="POST" action="/save_watering" id="wf" onsubmit="prepareSubmit()">
@@ -539,7 +543,7 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
 
     <div class="config-section">
       <h2 style="color:#1a6b3c">2) Wetter-Templates <span title="Ein Wetter-Template ist eine Sammlung wiederverwendbarer Regeln. Ein einziges Template kann also z. B. Hitze-Verlängerung und Regen-Verkürzung gleichzeitig enthalten.">ⓘ</span></h2>
-      <div class="hint-text" style="margin-bottom:10px">Templates k&ouml;nnen mehreren Pumpen-Zuweisungen zugeordnet werden. Skip-Regeln setzen komplett aus, Anpassungsregeln verk&uuml;rzen oder verl&auml;ngern die Basislaufzeit.</div>
+      <div class="hint-text" style="margin-bottom:10px">Templates k&ouml;nnen mehreren Kanal-Zuweisungen zugeordnet werden. Skip-Regeln setzen komplett aus, Anpassungsregeln verk&uuml;rzen oder verl&auml;ngern die Basislaufzeit.</div>
       <div id="weatherTemplates">{weather_template_rows_html}</div>
       <div id="noWeatherTemplatesMsg" style="display:{noWeatherTemplatesMsg};color:#999;font-style:italic;margin-bottom:8px">
         Noch kein Wetter-Template angelegt. Optional, aber f&uuml;r Wiederverwendung empfohlen.
@@ -550,11 +554,11 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
     </div>
 
     <div class="config-section">
-      <h2 style="color:#1a6b3c">3) Pumpen-Zuweisungen <span title="Eine Zuweisung entscheidet, welche Pumpe bei welchem Slot laufen soll und welche Wetterlogik dafür gilt.">ⓘ</span></h2>
-      <div class="hint-text" style="margin-bottom:10px">Hier wird verkn&uuml;pft: <b>Slot</b> + <b>Wetter-Template/kein Template</b> + <b>Pumpe</b>. So kann dieselbe Zeitsteuerung je Pumpe unterschiedlich auf Wetter reagieren.</div>
+      <h2 style="color:#1a6b3c">3) Kanal-Zuweisungen <span title="Eine Zuweisung entscheidet, welcher Kanal bei welchem Slot laufen soll und welche Wetterlogik dafür gilt.">ⓘ</span></h2>
+      <div class="hint-text" style="margin-bottom:10px">Hier wird verkn&uuml;pft: <b>Slot</b> + <b>Wetter-Template/kein Template</b> + <b>Kanal</b>. So kann dieselbe Zeitsteuerung je Kanal unterschiedlich auf Wetter reagieren.</div>
       <div id="assignRows">{assignment_rows_html}</div>
       <div id="noAssignmentsMsg" style="display:{noAssignmentsMsg};color:#999;font-style:italic;margin-bottom:8px">
-        Noch keine Pumpenzuweisung vorhanden.
+        Noch keine Kanalzuweisung vorhanden.
       </div>
       <div class="section-toolbar">
         <button type="button" class="btn" onclick="addAssignment()" style="background:#17a2b8">+ Zuweisung hinzuf&#252;gen</button>
@@ -562,7 +566,7 @@ const char HTML_WATERING_PAGE[] PROGMEM = R"rawhtml(
     </div>
 
     <div class="config-section">
-      <h2 style="color:#1a6b3c">4) Slot &#8594; Pumpen &#220;bersicht <span title="So siehst du je Zeitslot direkt darunter die Pumpenliste mit Wetterprofil und Basislaufzeit.">ⓘ</span></h2>
+      <h2 style="color:#1a6b3c">4) Slot &#8594; Kanal &#220;bersicht <span title="So siehst du je Zeitslot direkt darunter die Kanalliste mit Wetterprofil und Basislaufzeit.">ⓘ</span></h2>
       <div id="pumpSlotOverview">{pump_assignment_overview_html}</div>
     </div>
 
@@ -599,9 +603,9 @@ function updateAutomationLockHint(){
   hint.textContent='Sperre aktiv ohne Angabe: Beim Speichern werden standardmäßig 24 Stunden gesetzt.';
 }
 function pumpOpts(selIdx){
-  if(pumpCount===0) return '<option value="0" disabled>&#x26A0; Keine Pumpen konfiguriert</option>';
+  if(pumpCount===0) return '<option value="0" disabled>&#x26A0; Keine Kanäle konfiguriert</option>';
   var list=[];
-  for(var i=0;i<pumpCount;i++) list.push({idx:i,name:(pumpNames[i]||('Pumpe '+(i+1)))});
+  for(var i=0;i<pumpCount;i++) list.push({idx:i,name:(pumpNames[i]||('Kanal '+(i+1)))});
   list.sort(function(a,b){return a.name.localeCompare(b.name,'de');});
   var s='';
   for(var listIdx=0;listIdx<list.length;listIdx++) s+='<option value="'+list[listIdx].idx+'"'+(list[listIdx].idx===selIdx?' selected':'')+'>'+list[listIdx].name+'</option>';
@@ -729,7 +733,7 @@ function mkWeatherRule(wi,ri,d){
   return '<div id=\"wtr'+wi+'_'+ri+'\" style=\"border:1px solid #dce8f8;border-radius:6px;padding:10px;margin:8px 0;background:#fff\">'
     +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px\"><b>Regel '+(ri+1)+'</b><button type=\"button\" onclick=\"deleteWeatherRule('+wi+','+ri+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; Entfernen</button></div>'
     +'<div class=\"hint-text\" id=\"wt'+wi+'r'+ri+'Summary\" style=\"margin-bottom:8px\">'+ruleSummary({actionType:action,metric:metric,comparison:cmp,threshold:threshold,windowHours:win,effectPercent:effect})+'</div>'
-    +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Aktive Regeln werden ausgewertet, deaktivierte Regeln bleiben gespeichert.\"><input type=\"checkbox\" name=\"wt'+wi+'_r'+ri+'_enabled\" '+enabled+' onchange=\"onRuleChanged('+wi+','+ri+')\"> Aktiv</label></div><div class=\"form-col\"><label title=\"Aussetzen stoppt die Pumpe komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt'+wi+'_r'+ri+'_action\" onchange=\"onRuleActionChange('+wi+','+ri+',this.value)\">'+actOpts+'</select></div></div>'
+    +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Aktive Regeln werden ausgewertet, deaktivierte Regeln bleiben gespeichert.\"><input type=\"checkbox\" name=\"wt'+wi+'_r'+ri+'_enabled\" '+enabled+' onchange=\"onRuleChanged('+wi+','+ri+')\"> Aktiv</label></div><div class=\"form-col\"><label title=\"Aussetzen stoppt den Kanal komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt'+wi+'_r'+ri+'_action\" onchange=\"onRuleActionChange('+wi+','+ri+',this.value)\">'+actOpts+'</select></div></div>'
     +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Der Wetterwert wird mit dem Schwellwert verglichen. Für Zeitfenster-Regeln werden die nächsten Stunden betrachtet.\">Wetterwert</label><select name=\"wt'+wi+'_r'+ri+'_metric\" onchange=\"onRuleMetricChange('+wi+','+ri+',this.value)\">'+metOpts+'</select></div><div class=\"form-col\"><label title=\"Vergleicht Wetterwert und Schwellwert. Beispiel: > 30.\">Vergleich</label><select name=\"wt'+wi+'_r'+ri+'_operator\" onchange=\"onRuleChanged('+wi+','+ri+')\">'+cmpOpts+'</select></div><div class=\"form-col\"><label title=\"Ab diesem Wert greift die Regel.\">Schwellwert</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_threshold\" value=\"'+threshold+'\" step=\"0.1\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div>'
     +'<div id=\"wt'+wi+'r'+ri+'WindowRow\" class=\"form-row\" style=\"display:'+(metricUsesWindow(metric)?'flex':'none')+'\"><div class=\"form-col\"><label title=\"Nur für Zeitfenster-Regeln: wie viele nächste Stunden ausgewertet werden.\">Zeitfenster (h)</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_windowHours\" value=\"'+win+'\" min=\"1\" max=\"48\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div>'
     +'<div id=\"wt'+wi+'r'+ri+'EffectRow\" class=\"form-row\" style=\"display:'+(parseInt(action,10)===WEATHER_RULE_SKIP?'none':'flex')+'\"><div class=\"form-col\"><label title=\"Positive Prozentwerte beziehen sich immer auf die Basislaufzeit der Zuweisung.\">Effekt (%)</label><input type=\"number\" name=\"wt'+wi+'_r'+ri+'_effectPct\" value=\"'+effect+'\" min=\"1\" max=\"200\" oninput=\"onRuleChanged('+wi+','+ri+')\"></div></div></div>';
@@ -778,15 +782,15 @@ function deleteWeatherTemplate(wi){
 }
 function editWeatherTemplate(wi){ var inp=document.querySelector('input[name=\"wt'+wi+'_name\"]'); if(inp){inp.focus();inp.scrollIntoView({behavior:'smooth',block:'center'});} }
 function addAssignment(){
-  if(pumpCount===0){alert('Bitte zuerst Pumpen konfigurieren.');return;}
+  if(pumpCount===0){alert('Bitte zuerst Kanäle konfigurieren.');return;}
   if(document.getElementById('slots').querySelectorAll('[id^=\"slot\"]').length===0){alert('Bitte zuerst einen Slot anlegen.');return;}
   var ai=_nextAssignIdx++;
   var html='<div class=\"pump-entry\" style=\"border:1px solid #eadfb7;padding:12px;margin-bottom:12px;border-radius:6px;background:#fffdf5\" id=\"asrow'+ai+'\">'
     +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\"><b style=\"font-size:1.05em\">🔗 Zuweisung '+(ai+1)+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editAssignment('+ai+')\" style=\"padding:3px 8px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteAssignment('+ai+')\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
     +'<div class=\"form-row\">'
-    +'<div class=\"form-col\"><label title=\"Ein Slot beschreibt nur, wann geprüft wird. Er enthält keine pumpenspezifische Wetterlogik.\">Slot</label><select name=\"as'+ai+'_slot\">'+slotOpts(0)+'</select></div>'
-    +'<div class=\"form-col\"><label title=\"Die konkrete Pumpe, die bei dieser Zuweisung laufen soll.\">Pumpe</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
-    +'<div class=\"form-col\"><label title=\"Hier wird festgelegt, welche Wetterregeln für genau diese Pumpe und diesen Slot gelten. Kein Template = reine Zeitsteuerung.\">Wetter-Template</label><select name=\"as'+ai+'_weatherTemplate\">'+weatherTemplateOpts(-1)+'</select></div>'
+    +'<div class=\"form-col\"><label title=\"Ein Slot beschreibt nur, wann geprüft wird. Er enthält keine kanalspezifische Wetterlogik.\">Slot</label><select name=\"as'+ai+'_slot\">'+slotOpts(0)+'</select></div>'
+    +'<div class=\"form-col\"><label title=\"Der konkrete Kanal, der bei dieser Zuweisung laufen soll.\">Kanal</label><select name=\"as'+ai+'_pump\">'+pumpOpts(0)+'</select></div>'
+    +'<div class=\"form-col\"><label title=\"Hier wird festgelegt, welche Wetterregeln für genau diesen Kanal und diesen Slot gelten. Kein Template = reine Zeitsteuerung.\">Wetter-Template</label><select name=\"as'+ai+'_weatherTemplate\">'+weatherTemplateOpts(-1)+'</select></div>'
     +'<div class=\"form-col\"><label title=\"Basislaufzeit ohne Wetteranpassung. Zuschläge und Abzüge der Regeln beziehen sich auf diesen Wert.\">Dauer (s)</label><input type=\"number\" name=\"as'+ai+'_duration\" value=\"60\" min=\"1\" max=\"7200\"></div>'
     +'</div></div>';
   document.getElementById('assignRows').insertAdjacentHTML('beforeend',html);
@@ -921,11 +925,11 @@ function runSim(){
       +'<p><b>Triggerzeit:</b> '+esc(d.triggerTime||'–')+' | <b>Tag passt:</b> '+(d.dayMatched?'ja':'nein')+' | <b>Minute passt:</b> '+(d.triggerMatched?'ja':'nein')+'</p>'
       +'<p><b>Gesamtdauer:</b> '+esc(d.totalDurationSec||0)+' s</p>';
     if(d.plan && d.plan.length){
-      h+='<table><tr><th>#</th><th>Pumpe</th><th>Aktion</th><th>Bewässerung</th><th>Vorlauf</th><th>Gesamt</th><th>Basis</th><th>Regeln</th><th>Grund</th></tr>';
+      h+='<table><tr><th>#</th><th>Kanal</th><th>Aktion</th><th>Bewässerung</th><th>Vorlauf</th><th>Gesamt</th><th>Basis</th><th>Regeln</th><th>Grund</th></tr>';
       d.plan.forEach(function(p){ h+='<tr><td>'+esc(p.order)+'</td><td>'+esc(p.pumpName)+'</td><td>'+esc(actionLabelDe(p.action))+'</td><td>'+esc(p.plannedDurationSec)+' s</td><td>'+esc(p.leadTimeSec||0)+' s</td><td>'+esc(p.durationSec)+' s</td><td>'+esc(p.baseDurationSec)+' s</td><td>'+esc(p.appliedRules||'–')+'</td><td>'+esc(p.reason||'')+' ('+esc(p.policySource||'')+')</td></tr>'; });
       h+='</table>';
     } else {
-      h+='<p style=\"color:#999\">Keine Pumpen-Ausf&#252;hrung geplant.</p>';
+      h+='<p style=\"color:#999\">Keine Kanal-Ausf&#252;hrung geplant.</p>';
     }
     out.innerHTML=h+'</div>';
   })
@@ -998,7 +1002,7 @@ const char HTML_RUNLOG_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
   <h1>&#128203; Bew&#228;sserungs-Protokoll</h1>
   <p class="hint-text" style="margin-bottom:12px">
-    Zeigt die letzten Pumpen-Aktivierungen (neueste zuerst, max. 500 Eintr&#228;ge, rotierend).
+    Zeigt die letzten Kanal-Aktivierungen (neueste zuerst, max. 500 Eintr&#228;ge, rotierend).
   </p>
   <div style="display:flex;gap:8px;margin-bottom:12px">
     <button class="btn" onclick="loadLog()">&#8635; Aktualisieren</button>
@@ -1007,7 +1011,7 @@ const char HTML_RUNLOG_PAGE[] PROGMEM = R"rawhtml(
   <div id="logMsg" style="color:#dc3545;font-size:13px;min-height:18px;margin-bottom:8px"></div>
   <div class="table-wrap">
     <table class="compact-table">
-      <thead><tr><th>Datum / Uhrzeit</th><th>Slot</th><th>Pumpe</th><th>Dauer</th></tr></thead>
+      <thead><tr><th>Datum / Uhrzeit</th><th>Slot</th><th>Kanal</th><th>Dauer</th></tr></thead>
       <tbody id="logBody"><tr><td colspan="4" style="color:#999">Lade...</td></tr></tbody>
     </table>
   </div>
