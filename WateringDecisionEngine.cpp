@@ -507,7 +507,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
             p.plannedDurationSec = 0;
             p.leadTimeSec = 0;
             p.durationSec = 0;
-            setText(p.reason, sizeof(p.reason), "Pumpe ist deaktiviert.");
+            setText(p.reason, sizeof(p.reason), "Kanal ist deaktiviert.");
             skippedCount++;
             continue;
         }
@@ -623,7 +623,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
             if (p.adjustmentPercent != 0) {
                 char wxWarn[160];
                 snprintf(wxWarn, sizeof(wxWarn),
-                         "Pumpe %u: Wetteranpassung %+d%% (Basis %ds -> Bewässerung %ds).",
+                         "Kanal %u: Wetteranpassung %+d%% (Basis %ds -> Bewässerung %ds).",
                          (unsigned)(p.pumpIndex + 1), p.adjustmentPercent,
                          p.baseDurationSec, p.plannedDurationSec);
                 appendText(out.warnings, sizeof(out.warnings), wxWarn, " | ");
@@ -635,7 +635,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                 p.durationSec = pumpMaxRuntime;
                 char maxWarn[160];
                 snprintf(maxWarn, sizeof(maxWarn),
-                         "Pumpe %u: Gesamtlaufzeit %ds überschreitet Maximum %ds.",
+                         "Kanal %u: Gesamtlaufzeit %ds überschreitet Maximum %ds.",
                          (unsigned)(p.pumpIndex + 1), requestedTotal, pumpMaxRuntime);
                 appendText(out.warnings, sizeof(out.warnings), maxWarn, " | ");
                 int adjustedPlanned = p.durationSec - p.leadTimeSec;
@@ -645,7 +645,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                     p.leadTimeSec = 0;
                     p.durationSec = 0;
                     setText(p.reason, sizeof(p.reason),
-                            "Ausgesetzt: Pumpen-Maximalzeit ist kleiner oder gleich der Vorlaufzeit.");
+                            "Ausgesetzt: Kanal-Maximalzeit ist kleiner oder gleich der Vorlaufzeit.");
                     appendText(p.appliedRules, sizeof(p.appliedRules), "Maximalzeit <= Vorlaufzeit");
                     appendText(out.warnings, sizeof(out.warnings),
                                "Konfiguration prüfen: Maximalzeit <= Vorlaufzeit.", " | ");
@@ -655,9 +655,9 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                 if (adjustedPlanned < p.plannedDurationSec) {
                     p.plannedDurationSec = adjustedPlanned;
                 }
-                appendText(p.appliedRules, sizeof(p.appliedRules), "Auf Pumpen-Maximalzeit begrenzt");
+                appendText(p.appliedRules, sizeof(p.appliedRules), "Auf Kanal-Maximalzeit begrenzt");
                 appendText(p.reason, sizeof(p.reason),
-                           "Warnung: Gesamtlaufzeit wurde auf Pumpen-Maximalzeit begrenzt.", " ");
+                           "Warnung: Gesamtlaufzeit wurde auf Kanal-Maximalzeit begrenzt.", " ");
             }
             runnableCount++;
             out.totalDurationSec += p.durationSec;
@@ -665,13 +665,13 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
     }
 
     if (out.planCount == 0) {
-        setText(out.reason, sizeof(out.reason), "Keine Pumpenzuweisung für den Slot.");
+        setText(out.reason, sizeof(out.reason), "Keine Kanalzuweisung für den Slot.");
         out.action = WATER_ACTION_SKIP;
         return;
     }
 
     if (runnableCount == 0) {
-        setText(out.reason, sizeof(out.reason), "Alle zugewiesenen Pumpen werden ausgesetzt.");
+        setText(out.reason, sizeof(out.reason), "Alle zugewiesenen Kanäle werden ausgesetzt.");
         out.action = WATER_ACTION_SKIP;
     } else if (reducedCount > 0 && extendedCount == 0) {
         setText(out.reason, sizeof(out.reason), "Slot wird mit reduzierter Laufzeit ausgeführt.");

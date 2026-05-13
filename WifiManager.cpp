@@ -36,9 +36,28 @@ bool WifiManager::begin(DeviceConfig& config) {
 }
 
 void WifiManager::update() {
-    if (_apModeActive || _connected) return;
+    if (_apModeActive) return;
 
     unsigned long now = millis();
+
+    // ── Health-check for seemingly connected but dead links ───────────────────
+    if (_connected) {
+        if (now - _lastHealthCheckMs >= HEALTH_CHECK_INTERVAL_MS) {
+            _lastHealthCheckMs = now;
+            if (!healthCheck()) {
+                Serial.println("[WiFi] Health check failed – forcing reconnect.");
+                _connected = false;
+                _localIP   = "";
+                _ssid      = "";
+                _connectedSinceEpoch = 0;
+                // Trigger reconnect immediately on next update() call
+                _lastReconnectAttempt = now - RECONNECT_INTERVAL_MS;
+            }
+        }
+        return;
+    }
+
+    // ── Reconnect when disconnected ───────────────────────────────────────────
     if (now - _lastReconnectAttempt < RECONNECT_INTERVAL_MS) return;
     _lastReconnectAttempt = now;
 
@@ -53,12 +72,37 @@ void WifiManager::update() {
 void WifiManager::reconnect(DeviceConfig& config) {
     _config    = &config;
     _connected = false;
+    _localIP   = "";
+    _ssid      = "";
+    _connectedSinceEpoch = 0;
     WiFi.disconnect(true);
     delay(200);
     connectMultiAP(config);
 }
 
 // ─── Private ──────────────────────────────────────────────────────────────────
+
+bool WifiManager::healthCheck() {
+    wl_status_t status = WiFi.status();
+    if (status != WL_CONNECTED) {
+        Serial.printf("[WiFi] Health check: status=%d (not connected).\n", (int)status);
+        return false;
+    }
+    IPAddress localIp = WiFi.localIP();
+    if (localIp == IPAddress(0, 0, 0, 0)) {
+        Serial.println("[WiFi] Health check: local IP is 0.0.0.0.");
+        return false;
+    }
+    IPAddress gateway = WiFi.gatewayIP();
+    if (gateway == IPAddress(0, 0, 0, 0)) {
+        Serial.println("[WiFi] Health check: gateway IP is 0.0.0.0.");
+        return false;
+    }
+    int rssi = WiFi.RSSI();
+    Serial.printf("[WiFi] Health check OK (IP=%s, GW=%s, RSSI=%d dBm).\n",
+                  localIp.toString().c_str(), gateway.toString().c_str(), rssi);
+    return true;
+}
 
 bool WifiManager::connectMultiAP(DeviceConfig& config) {
     WiFi.mode(WIFI_STA);
@@ -120,6 +164,9 @@ bool WifiManager::connectMultiAP(DeviceConfig& config) {
         if (WiFi.status() == WL_CONNECTED) {
             _connected = true;
             _localIP   = WiFi.localIP().toString();
+            _ssid      = String(config.ssid);
+            time_t t = time(nullptr);
+            _connectedSinceEpoch = (t > 1000000L) ? t : 0;
             WiFi.setHostname(config.hostname);
             Serial.printf("[WiFi] Connected! IP: %s\n", _localIP.c_str());
             return true;
@@ -182,6 +229,9 @@ bool WifiManager::tryWPS() {
         if (WiFi.status() == WL_CONNECTED) {
             _connected = true;
             _localIP   = WiFi.localIP().toString();
+            _ssid      = WiFi.SSID();
+            time_t t = time(nullptr);
+            _connectedSinceEpoch = (t > 1000000L) ? t : 0;
             Serial.printf("[WiFi] WPS connected. IP: %s\n", _localIP.c_str());
             return true;
         }

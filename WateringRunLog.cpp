@@ -73,6 +73,37 @@ void WateringRunLog::append(time_t ts, const char* slotName, const char* pumpNam
     }
 }
 
+void WateringRunLog::fillLastStartTimes(const char* const* pumpNames, time_t* results, int count) const {
+    for (int i = 0; i < count; i++) results[i] = 0;
+    if (count <= 0 || !LittleFS.exists(RUNLOG_FILE)) return;
+
+    File f = LittleFS.open(RUNLOG_FILE, "r");
+    if (!f) return;
+
+    RunLogPsramAllocator alloc;
+    JsonDocument doc(&alloc);
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    if (err || !doc.is<JsonArray>()) return;
+
+    bool found[MAX_RELAY_COUNT] = {};
+    int remaining = count;
+    for (JsonVariant v : doc.as<JsonArray>()) {
+        if (!v.is<JsonObject>() || remaining == 0) break;
+        const char* pn = v["pn"].as<const char*>();
+        if (!pn || pn[0] == '\0') continue;
+        for (int i = 0; i < count; i++) {
+            if (found[i] || !pumpNames[i] || pumpNames[i][0] == '\0') continue;
+            if (strcmp(pn, pumpNames[i]) == 0) {
+                results[i] = (time_t)v["t"].as<long long>();
+                found[i] = true;
+                remaining--;
+                break;
+            }
+        }
+    }
+}
+
 bool WateringRunLog::getJson(String& out) const {
     if (!LittleFS.exists(RUNLOG_FILE)) {
         out = "[]";

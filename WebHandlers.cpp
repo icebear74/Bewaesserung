@@ -229,15 +229,36 @@ static void handleStatus() {
     page = replaceToken(page, "{state_str}",    String(sm->getStateString()));
 
     // WiFi
-    String wifiStatus;
+    String wifiStatus, wifiSSID, wifiSignal, wifiConnectedSince;
     if (wifi->isApModeActive()) {
-        wifiStatus = "AP-Modus (Setup)";
+        wifiStatus         = "AP-Modus (Setup)";
+        wifiSSID           = wifi->getApSSID();
+        wifiSignal         = "–";
+        wifiConnectedSince = "–";
     } else if (wifi->isConnected()) {
         wifiStatus = "Verbunden ✅";
+        wifiSSID   = wifi->getSSID();
+        int rssi    = wifi->getRSSI();
+        int quality = rssi >= -50 ? 100 : (rssi <= -100 ? 0 : (rssi + 100) * 2);
+        int numBars = quality >= 75 ? 4 : (quality >= 50 ? 3 : (quality >= 25 ? 2 : 1));
+        const char* barFull  = "&#9608;";  // █
+        const char* barEmpty = "&#9141;";  // ░
+        String bars;
+        for (int b = 1; b <= 4; b++) bars += (b <= numBars ? barFull : barEmpty);
+        wifiSignal = "<span style='font-family:monospace;letter-spacing:2px'>" + bars + "</span> "
+                     + String(rssi) + " dBm (" + String(quality) + "%)";
+        time_t since = wifi->getConnectedSinceEpoch();
+        wifiConnectedSince = (since > 0) ? formatDateTimeLocal(since) : "–";
     } else {
-        wifiStatus = "Nicht verbunden ❌";
+        wifiStatus         = "Nicht verbunden ❌";
+        wifiSSID           = "–";
+        wifiSignal         = "–";
+        wifiConnectedSince = "–";
     }
-    page = replaceToken(page, "{wifi_status}", wifiStatus);
+    page = replaceToken(page, "{wifi_status}",          wifiStatus);
+    page = replaceToken(page, "{wifi_ssid}",            wifiSSID);
+    page = replaceToken(page, "{wifi_signal}",          wifiSignal);
+    page = replaceToken(page, "{wifi_connected_since}", wifiConnectedSince);
     page = replaceToken(page, "{ip_address}",  wifi->isConnected() ? wifi->getLocalIP() : (wifi->isApModeActive() ? "192.168.4.1" : "–"));
 
     // Time
@@ -286,6 +307,20 @@ static void handleStatus() {
     bool weatherAvailable = (wm && wm->isAvailable());
     bool weatherStale = (wm && wm->isStale());
     time_t now = time(nullptr);
+
+    // ── Read last-start times from run log (survives reboots) ─────────────────
+    time_t lastStartFromLog[MAX_RELAY_COUNT] = {};
+    {
+        WateringRunLog* rl = g_app->getRunLog();
+        if (rl && hw.relayCount > 0) {
+            const char* pumpNamesArr[MAX_RELAY_COUNT] = {};
+            for (int i = 0; i < hw.relayCount && i < MAX_RELAY_COUNT; i++) {
+                pumpNamesArr[i] = hw.pumps[i].name;
+            }
+            rl->fillLastStartTimes(pumpNamesArr, lastStartFromLog, hw.relayCount);
+        }
+    }
+
     if (hw.relayCount > 0) {
         pumpHtml += "<h2 style='margin-top:4px;color:#1a6b3c'>💧 Kanäle (Live-Entscheidung)</h2>";
         pumpHtml += "<div class='table-wrap'><table class='compact-table'><tr><th>Kanal</th><th>Status</th><th>Nächster Lauf</th><th>Entscheidung</th><th>Grund</th><th>Letzter Start</th></tr>";
@@ -311,7 +346,6 @@ static void handleStatus() {
             time_t bestTs = 0;
             String bestSlot = "–";
             WateringDecisionPumpPlan bestPlan;
-            String bestWarnings = "";
             if (nextInfo) {
                 for (int si = 0; si < sc.slotCount; si++) {
                     if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo)) continue;
@@ -322,24 +356,27 @@ static void handleStatus() {
                         bestTs = nextInfo->triggerTime;
                         bestSlot = getSlotLabel(sc.slots[si], si);
                         bestPlan = pp;
-                        bestWarnings = nextInfo->result.warnings;
                     }
                 }
             }
 
+            // Last start: prefer live relay info, fall back to run log (persists reboots)
             String lastRun = "–";
             if (haveRt && rt.lastStartEpoch > 0) {
                 lastRun = formatDateTimeLocal(rt.lastStartEpoch);
+            } else if (i < MAX_RELAY_COUNT && lastStartFromLog[i] > 0) {
+                lastRun = formatDateTimeLocal(lastStartFromLog[i])
+                          + "<br><small style='color:#888'>(Log)</small>";
             }
             String nextCell = foundNext ? (bestSlot + "<br><span style='color:#555'>" + formatDateTimeLocal(bestTs) + "</span>") : "–";
             String action = foundNext ? String(actionToLabelDe(bestPlan.action)) : "aussetzen";
+            // Reason: show only this channel's pump-plan reason + applied rules + policy
             String reason = foundNext ? String(bestPlan.reason) : "Keine Zuweisung";
-            if (bestWarnings.length()) reason += "<br><span style='color:#b26a00'>⚠ " + bestWarnings + "</span>";
             if (foundNext) {
-                reason += "<br><span style='color:#666'>Policy: " + String(bestPlan.policySource) + "</span>";
                 if (strlen(bestPlan.appliedRules) > 0) {
                     reason += "<br><span style='color:#555'>Regeln: " + String(bestPlan.appliedRules) + "</span>";
                 }
+                reason += "<br><span style='color:#666'>Policy: " + String(bestPlan.policySource) + "</span>";
             }
             String rowStyle = (!active || !hw.pumps[i].enabled) ? " style='background:#fff7cc'" : "";
             pumpHtml += "<tr" + rowStyle + "><td>" + getPumpLabel(hw, i) + "</td><td>" + status + "</td><td>" + nextCell +

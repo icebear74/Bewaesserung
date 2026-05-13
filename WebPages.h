@@ -79,6 +79,7 @@ const char HTML_FOOTER[] PROGMEM = R"rawhtml(
 //               {ds3231_status} {offline_mode} {rtc_temp}
 //               {pump_status_html} {weather_html}
 //               {firmware_version} {firmware_build_date} {firmware_git_hash}
+//               {wifi_ssid} {wifi_signal} {wifi_connected_since}
 
 const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
 <div class="card">
@@ -91,6 +92,9 @@ const char HTML_STATUS_PAGE[] PROGMEM = R"rawhtml(
       <table>
         <tr><td>Systemzustand</td><td><b>{state_str}</b></td></tr>
         <tr><td>WLAN-Status</td><td>{wifi_status}</td></tr>
+        <tr><td>SSID</td><td>{wifi_ssid}</td></tr>
+        <tr><td>Signal</td><td>{wifi_signal}</td></tr>
+        <tr><td>Verbunden seit</td><td>{wifi_connected_since}</td></tr>
         <tr><td>IP-Adresse</td><td>{ip_address}</td></tr>
         <tr><td>Lokale Zeit</td><td>{time_str}</td></tr>
         <tr><td>Betriebszeit</td><td>{uptime}</td></tr>
