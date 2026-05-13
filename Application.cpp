@@ -11,6 +11,7 @@
 #include "WeatherManager.h"
 #include "WateringScheduler.h"
 #include "WateringRunLog.h"
+#include "Version.hpp"
 #include <ArduinoOTA.h>
 #include <Wire.h>
 
@@ -32,6 +33,12 @@ Application::~Application() {
 }
 
 void Application::begin() {
+    Serial.printf("[App] Firmware %s (base=%s, git=%s, build=%s)\n",
+                  BewaesserungVersion::kFullVersion,
+                  BewaesserungVersion::kBaseVersion,
+                  BewaesserungVersion::kGitHash,
+                  BewaesserungVersion::kBuildDate);
+
     // 1. Boot state
     _stateManager = new StateManager();
     _stateManager->setState(SystemState::BOOT);

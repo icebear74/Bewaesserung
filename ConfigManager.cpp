@@ -308,7 +308,7 @@ bool ConfigManager::loadHardwareConfig() {
             p.enabled     = (pin >= 0) && (i < _hardwareConfig.relayCount);
             p.invertLogic = _hardwareConfig.relayInverted;
             char nameBuf[32];
-            snprintf(nameBuf, sizeof(nameBuf), "Pumpe %d", i + 1);
+            snprintf(nameBuf, sizeof(nameBuf), "Kanal %d", i + 1);
             strlcpy(p.name, nameBuf, sizeof(p.name));
         }
         Serial.printf("[Config] Hardware config loaded (legacy format, migrated): %d relays.\n", _hardwareConfig.relayCount);

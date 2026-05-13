@@ -20,7 +20,7 @@ src/
 ├── hw/
 │   ├── OledStatus.h/.cpp        # SSD1306 128×64 Statusanzeige
 │   ├── Ds3231Manager.h/.cpp     # DS3231 RTC-Verwaltung
-│   └── RelayManager.h/.cpp      # Relais-/Pumpensteuerg (sicherheitsgesperrt)
+│   └── RelayManager.h/.cpp      # Relais-/Kanalsteuerung (sicherheitsgesperrt)
 └── web/
     ├── WebServer.h/.cpp         # HTTP-Server + DNS Captive Portal
     ├── WebPages.h               # PROGMEM HTML-Templates
@@ -49,7 +49,7 @@ src/
 ### Sicherheitsregeln
 
 - **Kein WLAN ≠ kein Betrieb**: Bei vorhandener Bewässerungskonfiguration läuft das System lokal weiter.
-- **Erststart ist gesperrt**: Ohne Bewässerungsplan darf keine Pumpe geschaltet werden.
+- **Erststart ist gesperrt**: Ohne Bewässerungsplan darf kein Kanal geschaltet werden.
 - **DS3231-Warnung**: Fehlt der RTC, wird im Webinterface ein roter Warnbalken angezeigt.
 - **Relais sicher gesperrt**: `activateRelay()` erfordert explizites `armed=true`.
 
@@ -59,7 +59,7 @@ src/
 |-------------------|-----------------------------------------------|
 | `/config.json`    | WLAN, Zeitzone, NTP-Server, Standort          |
 | `/hardware.json`  | Relais-Anzahl, GPIO-Pins, Invertierung        |
-| `/watering.json`  | Bewässerungspläne (leer = Pumpen gesperrt)    |
+| `/watering.json`  | Bewässerungspläne (leer = Kanäle gesperrt)    |
 
 ### WebGUI-Seiten
 
@@ -74,7 +74,7 @@ src/
 ### Bewässerungsmodell (aktuell)
 
 - **Slots** definieren nur Zeittrigger + Wiederholung (`Wochentage` oder `alle N Tage`).
-- **Pumpen-Zuweisungen** verbinden Pumpen mit Slots (Bacula-ähnlich).
+- **Kanal-Zuweisungen** verbinden Kanäle mit Slots (Bacula-ähnlich).
 - **Wetter-Templates** enthalten mehrere kombinierbare Wetterregeln pro Vorlage (z. B. `Hitze -> +20%` und `Regen in 6h -> -25%`).
 - Die Auswertung ist zentral und deterministisch: zuerst **Aussetzen**, danach **Verkürzen/Verlängern** relativ zur Basislaufzeit.
 - Livebetrieb, Status, Simulation und API verwenden dieselbe `WateringDecisionEngine`.
@@ -89,7 +89,23 @@ src/
 
 - `/api/weather` – Wetterdaten inkl. 24h-Kontext (wenn verfügbar)
 - `/api/watering_simulate` – Simulationslauf für einen Slot/Zeitpunkt
-- `/api/watering_status` – Gesamtstatus mit Slot-/Pumpen-Entscheidungen und nächsten Läufen
+- `/api/watering_status` – Gesamtstatus mit Slot-/Kanal-Entscheidungen und nächsten Läufen
+
+### Versionierung / Release-Grundlage
+
+- Firmware-Metadaten werden in `Version.hpp` eingebettet (`kBaseVersion`, `kFullVersion`, `kGitHash`, `kBuildDate`).
+- Das Skript `./write_version.sh` ist die Quelle für die Version:
+  - liest `VERSION` (`MAJOR.MINOR.PATCH`)
+  - erhöht bei **jedem Aufruf automatisch nur die PATCH-Version**
+  - lässt MAJOR und MINOR unverändert
+  - schreibt anschließend `VERSION` und `Version.hpp` neu
+- Beispiel:
+
+```bash
+./write_version.sh
+```
+
+- Danach ist die neue Firmware-Version auf der `/status`-Seite und im Boot-Log sichtbar.
 
 ### Setup-AP-Modus
 

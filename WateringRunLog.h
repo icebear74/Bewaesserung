@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <time.h>
+#include "ConfigManager.h"
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
 
@@ -38,7 +39,14 @@ public:
     void append(time_t ts, const char* slotName, const char* pumpName, int durationSec);
 
     /**
-     * Serialise the full log (newest first) into @p out as a JSON array.
+     * Fills results[i] with the most recent activation epoch for pumpNames[i],
+     * or 0 if no entry is found. count must match both array sizes.
+     * Reads the log file once; log entries are newest-first so the first match
+     * per name is the most recent run.
+     */
+    void fillLastStartTimes(const char* const* pumpNames, time_t* results, int count) const;
+
+    /** Serialise the full log (newest first) into @p out as a JSON array.
      * Returns false only if the file exists but cannot be opened.
      */
     bool getJson(String& out) const;

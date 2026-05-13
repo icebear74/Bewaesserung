@@ -13,6 +13,7 @@
 #include "WateringDecisionEngine.h"
 #include "WateringRunLog.h"
 #include "FileManager.h"
+#include "Version.hpp"
 #include <WebServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -228,15 +229,36 @@ static void handleStatus() {
     page = replaceToken(page, "{state_str}",    String(sm->getStateString()));
 
     // WiFi
-    String wifiStatus;
+    String wifiStatus, wifiSSID, wifiSignal, wifiConnectedSince;
     if (wifi->isApModeActive()) {
-        wifiStatus = "AP-Modus (Setup)";
+        wifiStatus         = "AP-Modus (Setup)";
+        wifiSSID           = wifi->getApSSID();
+        wifiSignal         = "–";
+        wifiConnectedSince = "–";
     } else if (wifi->isConnected()) {
         wifiStatus = "Verbunden ✅";
+        wifiSSID   = wifi->getSSID();
+        int rssi    = wifi->getRSSI();
+        int quality = rssi >= -50 ? 100 : (rssi <= -100 ? 0 : (rssi + 100) * 2);
+        int numBars = quality >= 75 ? 4 : (quality >= 50 ? 3 : (quality >= 25 ? 2 : 1));
+        const char* barFull  = "&#9608;";  // █
+        const char* barEmpty = "&#9141;";  // ░
+        String bars;
+        for (int b = 1; b <= 4; b++) bars += (b <= numBars ? barFull : barEmpty);
+        wifiSignal = "<span style='font-family:monospace;letter-spacing:2px'>" + bars + "</span> "
+                     + String(rssi) + " dBm (" + String(quality) + "%)";
+        time_t since = wifi->getConnectedSinceEpoch();
+        wifiConnectedSince = (since > 0) ? formatDateTimeLocal(since) : "–";
     } else {
-        wifiStatus = "Nicht verbunden ❌";
+        wifiStatus         = "Nicht verbunden ❌";
+        wifiSSID           = "–";
+        wifiSignal         = "–";
+        wifiConnectedSince = "–";
     }
-    page = replaceToken(page, "{wifi_status}", wifiStatus);
+    page = replaceToken(page, "{wifi_status}",          wifiStatus);
+    page = replaceToken(page, "{wifi_ssid}",            wifiSSID);
+    page = replaceToken(page, "{wifi_signal}",          wifiSignal);
+    page = replaceToken(page, "{wifi_connected_since}", wifiConnectedSince);
     page = replaceToken(page, "{ip_address}",  wifi->isConnected() ? wifi->getLocalIP() : (wifi->isApModeActive() ? "192.168.4.1" : "–"));
 
     // Time
@@ -256,6 +278,9 @@ static void handleStatus() {
     }
     page = replaceToken(page, "{time_str}", timeStr);
     page = replaceToken(page, "{uptime}",   formatUptime());
+    page = replaceToken(page, "{firmware_version}", String(BewaesserungVersion::kFullVersion));
+    page = replaceToken(page, "{firmware_build_date}", String(BewaesserungVersion::kBuildDate));
+    page = replaceToken(page, "{firmware_git_hash}", String(BewaesserungVersion::kGitHash));
 
     // DS3231
     if (ds && ds->isPresent()) {
@@ -282,9 +307,23 @@ static void handleStatus() {
     bool weatherAvailable = (wm && wm->isAvailable());
     bool weatherStale = (wm && wm->isStale());
     time_t now = time(nullptr);
+
+    // ── Read last-start times from run log (survives reboots) ─────────────────
+    time_t lastStartFromLog[MAX_RELAY_COUNT] = {};
+    {
+        WateringRunLog* rl = g_app->getRunLog();
+        if (rl && hw.relayCount > 0) {
+            const char* pumpNamesArr[MAX_RELAY_COUNT] = {};
+            for (int i = 0; i < hw.relayCount && i < MAX_RELAY_COUNT; i++) {
+                pumpNamesArr[i] = hw.pumps[i].name;
+            }
+            rl->fillLastStartTimes(pumpNamesArr, lastStartFromLog, hw.relayCount);
+        }
+    }
+
     if (hw.relayCount > 0) {
-        pumpHtml += "<h2 style='margin-top:4px;color:#1a6b3c'>💧 Pumpen (Live-Entscheidung)</h2>";
-        pumpHtml += "<div class='table-wrap'><table class='compact-table'><tr><th>Pumpe</th><th>Status</th><th>Nächster Lauf</th><th>Entscheidung</th><th>Grund</th><th>Letzter Start/Stop</th></tr>";
+        pumpHtml += "<h2 style='margin-top:4px;color:#1a6b3c'>💧 Kanäle (Live-Entscheidung)</h2>";
+        pumpHtml += "<div class='table-wrap'><table class='compact-table'><tr><th>Kanal</th><th>Status</th><th>Nächster Lauf</th><th>Entscheidung</th><th>Grund</th><th>Letzter Start</th></tr>";
 
         // Allocate NextSlotDecisionInfo (~14 KB) in PSRAM once and reuse it
         // across both loops to avoid overflowing the 8 KB loopTask stack.
@@ -307,7 +346,6 @@ static void handleStatus() {
             time_t bestTs = 0;
             String bestSlot = "–";
             WateringDecisionPumpPlan bestPlan;
-            String bestWarnings = "";
             if (nextInfo) {
                 for (int si = 0; si < sc.slotCount; si++) {
                     if (!findNextSlotDecision(si, now, sc, hw, weatherData, weatherAvailable, weatherStale, *nextInfo)) continue;
@@ -318,24 +356,27 @@ static void handleStatus() {
                         bestTs = nextInfo->triggerTime;
                         bestSlot = getSlotLabel(sc.slots[si], si);
                         bestPlan = pp;
-                        bestWarnings = nextInfo->result.warnings;
                     }
                 }
             }
 
+            // Last start: prefer live relay info, fall back to run log (persists reboots)
             String lastRun = "–";
-            if (haveRt && (rt.lastStartEpoch > 0 || rt.lastStopEpoch > 0)) {
-                lastRun = formatDateTimeLocal(rt.lastStartEpoch) + " / " + formatDateTimeLocal(rt.lastStopEpoch);
+            if (haveRt && rt.lastStartEpoch > 0) {
+                lastRun = formatDateTimeLocal(rt.lastStartEpoch);
+            } else if (i < MAX_RELAY_COUNT && lastStartFromLog[i] > 0) {
+                lastRun = formatDateTimeLocal(lastStartFromLog[i])
+                          + "<br><small style='color:#888'>(Log)</small>";
             }
             String nextCell = foundNext ? (bestSlot + "<br><span style='color:#555'>" + formatDateTimeLocal(bestTs) + "</span>") : "–";
             String action = foundNext ? String(actionToLabelDe(bestPlan.action)) : "aussetzen";
+            // Reason: show only this channel's pump-plan reason + applied rules + policy
             String reason = foundNext ? String(bestPlan.reason) : "Keine Zuweisung";
-            if (bestWarnings.length()) reason += "<br><span style='color:#b26a00'>⚠ " + bestWarnings + "</span>";
             if (foundNext) {
-                reason += "<br><span style='color:#666'>Policy: " + String(bestPlan.policySource) + "</span>";
                 if (strlen(bestPlan.appliedRules) > 0) {
                     reason += "<br><span style='color:#555'>Regeln: " + String(bestPlan.appliedRules) + "</span>";
                 }
+                reason += "<br><span style='color:#666'>Policy: " + String(bestPlan.policySource) + "</span>";
             }
             String rowStyle = (!active || !hw.pumps[i].enabled) ? " style='background:#fff7cc'" : "";
             pumpHtml += "<tr" + rowStyle + "><td>" + getPumpLabel(hw, i) + "</td><td>" + status + "</td><td>" + nextCell +
@@ -345,7 +386,7 @@ static void handleStatus() {
         free(nextInfo);
         pumpHtml += "</table></div>";
     } else {
-        pumpHtml = "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
+        pumpHtml = "<p style='color:#999;font-style:italic'>Keine Kanäle konfiguriert.</p>";
     }
     page = replaceToken(page, "{pump_status_html}", pumpHtml);
 
@@ -477,7 +518,7 @@ static void handleStatus() {
                             strstr(nextInfo2->result.warnings, "Wetteranpassung") != nullptr;
                         String slotBg = automationLocked ? "#ffe5e5" : (slotHasRuntimeWarning ? "#fff7cc" : "#ffffff");
                         nextSlotPlanHtml += "<div style='margin-top:8px;background:" + slotBg + ";padding:8px;border-radius:6px'><b>Slot-Übersicht:</b><div class='table-wrap'><table class='compact-table'>"
-                                            "<tr><th>Pumpe</th><th>Wetterprofil</th><th>Status</th><th>Laufzeit</th><th>Grund</th></tr>";
+                                            "<tr><th>Kanal</th><th>Wetterprofil</th><th>Status</th><th>Laufzeit</th><th>Grund</th></tr>";
                         bool usedPlan[MAX_SLOT_ASSIGNMENTS] = {false};
                         for (int printed = 0; printed < nextInfo2->result.planCount; printed++) {
                             int best = -1;
@@ -715,7 +756,7 @@ static String buildPumpRowHtml(int i, const PumpEntry& p, const HardwareConfig& 
     r.reserve(1000);
     r += "<div class=\"pump-entry\" id=\"prow"; r += i; r += "\" style=\"border:1px solid #ddd;padding:10px;margin-bottom:10px;border-radius:4px\">";
     r += "<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:6px\">";
-    r += "<b>Pumpe #"; r += (i + 1); r += "</b>";
+    r += "<b>Kanal #"; r += (i + 1); r += "</b>";
     r += "<button type=\"button\" onclick=\"deletePump("; r += i; r += ")\" ";
     r += "style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
     r += "</div>";
@@ -775,7 +816,7 @@ static String buildPumpRowHtml(int i, const PumpEntry& p, const HardwareConfig& 
     r += "<div class=\"form-col\"><label>Max. Test-Laufzeit (s)</label>";
     r += "<input type=\"number\" name=\"p"; r += i; r += "_maxRuntime\" value=\"";
     r += p.maxRuntimeSec; r += "\" min=\"1\" max=\"3600\"></div>";
-    r += "<div class=\"form-col\"><label title=\"Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Wird zur geplanten Pumpenlaufzeit addiert.\">Schlauch-/Vorlaufzeit (s) <span title=\"Beispiel: 30s geplant + 12s Vorlauf = 42s Gesamtlaufzeit.\">ⓘ</span></label>";
+    r += "<div class=\"form-col\"><label title=\"Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Wird zur geplanten Kanallaufzeit addiert.\">Schlauch-/Vorlaufzeit (s) <span title=\"Beispiel: 30s geplant + 12s Vorlauf = 42s Gesamtlaufzeit.\">ⓘ</span></label>";
     r += "<input type=\"number\" name=\"p"; r += i; r += "_leadTime\" value=\"";
     r += p.leadTimeSec; r += "\" min=\"0\" max=\"3600\"></div></div>";
     r += "<label>Notizen</label><input type=\"text\" name=\"p"; r += i; r += "_notes\" value=\"";
@@ -922,7 +963,7 @@ static void handleSaveHardware() {
                 String page = buildPage(HTML_ERROR_PAGE);
                 page = replaceToken(page, "{error_msg}",
                     "Doppelte GPIO-Pin-Belegung: Pin " + String(pi.pin) +
-                    " ist Pumpe " + String(i + 1) + " und Pumpe " + String(j + 1) + " zugewiesen.");
+                    " ist Kanal " + String(i + 1) + " und Kanal " + String(j + 1) + " zugewiesen.");
                 page = replaceToken(page, "{back_url}", "/config_hardware");
                 g_server->send(400, "text/html; charset=UTF-8", page);
                 return;
@@ -936,7 +977,7 @@ static void handleSaveHardware() {
         if (p.pin > 39) {
             String page = buildPage(HTML_ERROR_PAGE);
             page = replaceToken(page, "{error_msg}",
-                "Ung&#252;ltiger GPIO-Pin " + String(p.pin) + " bei Pumpe " + String(i + 1) + " (g&#252;ltig: -1 oder 0-39).");
+                "Ung&#252;ltiger GPIO-Pin " + String(p.pin) + " bei Kanal " + String(i + 1) + " (g&#252;ltig: -1 oder 0-39).");
             page = replaceToken(page, "{back_url}", "/config_hardware");
             g_server->send(400, "text/html; charset=UTF-8", page);
             return;
@@ -970,7 +1011,7 @@ static void handleSaveHardware() {
                 page = replaceToken(page, "{error_msg}",
                     "Doppelte I2C-Kanal-Belegung: Expander " + String(pi.expanderIndex + 1) +
                     " Kanal " + String(pi.i2cChannel) +
-                    " ist Pumpe " + String(i + 1) + " und Pumpe " + String(j + 1) + " zugewiesen.");
+                    " ist Kanal " + String(i + 1) + " und Kanal " + String(j + 1) + " zugewiesen.");
                 page = replaceToken(page, "{back_url}", "/config_hardware");
                 g_server->send(400, "text/html; charset=UTF-8", page);
                 return;
@@ -984,7 +1025,7 @@ static void handleSaveHardware() {
         if (p.expanderIndex >= (uint8_t)newHw.expanderCount) {
             String page = buildPage(HTML_ERROR_PAGE);
             page = replaceToken(page, "{error_msg}",
-                "Pumpe " + String(i + 1) + " referenziert Expander " + String(p.expanderIndex + 1) +
+                "Kanal " + String(i + 1) + " referenziert Expander " + String(p.expanderIndex + 1) +
                 ", aber es sind nur " + String(newHw.expanderCount) + " Expander konfiguriert.");
             page = replaceToken(page, "{back_url}", "/config_hardware");
             g_server->send(400, "text/html; charset=UTF-8", page);
@@ -995,7 +1036,7 @@ static void handleSaveHardware() {
         if (p.i2cChannel > maxChan) {
             String page = buildPage(HTML_ERROR_PAGE);
             page = replaceToken(page, "{error_msg}",
-                "Pumpe " + String(i + 1) + ": Kanal " + String(p.i2cChannel) +
+                "Kanal " + String(i + 1) + ": Kanal " + String(p.i2cChannel) +
                 " ist zu gross f&#252;r den gew&#228;hlten Expander (max. " + String(maxChan) + ").");
             page = replaceToken(page, "{back_url}", "/config_hardware");
             g_server->send(400, "text/html; charset=UTF-8", page);
@@ -1023,7 +1064,7 @@ static void handleRelayTest() {
 
     RelayManager* rm = g_app->getRelayManager();
     if (!rm || relay < 0 || relay >= rm->getRelayCount()) {
-        g_server->send(200, "application/json", "{\"ok\":false,\"msg\":\"Ung\\u00fcltiger Pumpenindex\"}");
+        g_server->send(200, "application/json", "{\"ok\":false,\"msg\":\"Ung\\u00fcltiger Kanalindex\"}");
         return;
     }
     bool ok = false;
@@ -1242,8 +1283,8 @@ static String getSlotLabel(const WateringSlot& slot, int idx) {
 }
 
 static String getPumpLabel(const HardwareConfig& hw, int idx) {
-    if (idx < 0 || idx >= hw.relayCount) return "Ungültige Pumpe";
-    return hw.pumps[idx].name[0] ? String(hw.pumps[idx].name) : ("Pumpe " + String(idx + 1));
+    if (idx < 0 || idx >= hw.relayCount) return "Ungültiger Kanal";
+    return hw.pumps[idx].name[0] ? String(hw.pumps[idx].name) : ("Kanal " + String(idx + 1));
 }
 
 static int buildSortedPumpIndices(const HardwareConfig& hw, int* out, int outCap) {
@@ -1367,7 +1408,7 @@ static String buildWeatherRuleRowHtml(int wi, int ri, const WeatherRule& rule) {
     html += ",";
     html += ri;
     html += ")\"> Aktiv</label></div>";
-    html += "<div class=\"form-col\"><label title=\"Aussetzen stoppt die Pumpe komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt";
+    html += "<div class=\"form-col\"><label title=\"Aussetzen stoppt den Kanal komplett. Verkürzen/Verlängern ändern die Basislaufzeit prozentual.\">Regeltyp</label><select name=\"wt";
     html += wi;
     html += "_r";
     html += ri;
@@ -1553,7 +1594,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         html += displayIdx;
         html += ")\" style=\"padding:3px 8px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button>";
         html += "</div></div><div class=\"form-row\">";
-        html += "<div class=\"form-col\"><label title=\"Ein Slot beschreibt nur, wann geprüft wird. Er enthält keine pumpenspezifische Wetterlogik.\">Slot</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Ein Slot beschreibt nur, wann geprüft wird. Er enthält keine kanalspezifische Wetterlogik.\">Slot</label><select name=\"as";
         html += displayIdx;
         html += "_slot\">";
         for (int si = 0; si < sc.slotCount; si++) {
@@ -1565,7 +1606,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label title=\"Die konkrete Pumpe, die bei dieser Zuweisung laufen soll.\">Pumpe</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Der konkrete Kanal, der bei dieser Zuweisung laufen soll.\">Kanal</label><select name=\"as";
         html += displayIdx;
         html += "_pump\">";
         for (int poi = 0; poi < pumpOrderCount; poi++) {
@@ -1578,7 +1619,7 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         }
         html += "</select></div>";
 
-        html += "<div class=\"form-col\"><label title=\"Hier wird festgelegt, welche Wetterregeln für genau diese Pumpe und diesen Slot gelten. Kein Template = reine Zeitsteuerung.\">Wetter-Template</label><select name=\"as";
+        html += "<div class=\"form-col\"><label title=\"Hier wird festgelegt, welche Wetterregeln für genau diesen Kanal und diesen Slot gelten. Kein Template = reine Zeitsteuerung.\">Wetter-Template</label><select name=\"as";
         html += displayIdx;
         html += "_weatherTemplate\">";
         html += "<option value=\"-1\"";
@@ -1612,7 +1653,7 @@ static String buildPumpSlotOverviewHtml(const SlotConfig& sc, const HardwareConf
     }
     int pumpOrder[MAX_RELAY_COUNT];
     int pumpOrderCount = buildSortedPumpIndices(hw, pumpOrder, MAX_RELAY_COUNT);
-    String html = "<div class='table-wrap'><table class='compact-table'><tr><th>Slot</th><th>Zugewiesene Pumpen</th></tr>";
+    String html = "<div class='table-wrap'><table class='compact-table'><tr><th>Slot</th><th>Zugewiesene Kanäle</th></tr>";
     for (int si = 0; si < sc.slotCount; si++) {
         html += "<tr><td><b>";
         html += getSlotLabel(sc.slots[si], si);
@@ -1667,11 +1708,11 @@ static void handleConfigWatering() {
     if (cfg->isWateringConfigValid()) {
         char buf[100];
         snprintf(buf, sizeof(buf),
-                 "<p style='color:#1a6b3c;margin-top:8px'>&#10003; %d Slot(s), %d Wetter-Template(s), %d Zuweisung(en), %d Pumpe(n).</p>",
+                 "<p style='color:#1a6b3c;margin-top:8px'>&#10003; %d Slot(s), %d Wetter-Template(s), %d Zuweisung(en), %d Kanal(e).</p>",
                  sc.slotCount, sc.weatherTemplateCount, sc.assignCount, hw.relayCount);
         wateringStatus = buf;
     } else {
-        wateringStatus = "<p style='color:#dc3545;margin-top:8px'>&#10007; Kein g&#252;ltiger Plan: Pumpen konfigurieren, Slots anlegen und Zuweisungen speichern.</p>";
+        wateringStatus = "<p style='color:#dc3545;margin-top:8px'>&#10007; Kein g&#252;ltiger Plan: Kanäle konfigurieren, Slots anlegen und Zuweisungen speichern.</p>";
     }
     page = replaceToken(page, "{watering_status}", wateringStatus);
     String lockHtml;
@@ -1702,7 +1743,7 @@ static void handleConfigWatering() {
         JsonArray arr = pumpNamesDoc.to<JsonArray>();
         for (int i = 0; i < hw.relayCount; i++) {
             arr.add(hw.pumps[i].name[0] ? String(hw.pumps[i].name)
-                                        : ("Pumpe " + String(i + 1)));
+                                        : ("Kanal " + String(i + 1)));
         }
         String pumpNamesJson;
         serializeJson(arr, pumpNamesJson);
