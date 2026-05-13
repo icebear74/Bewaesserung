@@ -40,7 +40,9 @@ bool WateringScheduler::isBusy() const {
 void WateringScheduler::update() {
     if (!_cfg || !_rm) return;
 
+    time_t now = time(nullptr);
     bool armed = _cfg->isWateringConfigValid();
+    bool automationLocked = _cfg->isAutomationLocked(now);
 
     // ── Step 1: advance running pump ─────────────────────────────────────────
     if (_pumpRunning) {
@@ -70,7 +72,9 @@ void WateringScheduler::update() {
         const QueueItem& item = _queue[_qHead % SCHEDULER_QUEUE_SIZE];
         _qHead = (_qHead + 1) % SCHEDULER_QUEUE_SIZE;
 
-        if (armed) {
+        if (automationLocked) {
+            Serial.printf("[Sched] Queue item for pump %d dropped – Automatiksperre aktiv.\n", item.pumpIndex);
+        } else if (armed) {
             if (_rm->activateRelay(item.pumpIndex, armed, item.slotIndex, item.durationSec)) {
                 _pumpRunning = true;
                 _activePump  = item.pumpIndex;
@@ -97,7 +101,6 @@ void WateringScheduler::update() {
     }
 
     // ── Step 3: check for newly triggered slots (once per minute) ────────────
-    time_t now = time(nullptr);
     if (now < 1000000L) return;  // system clock not yet set
 
     struct tm lt;
@@ -134,6 +137,15 @@ void WateringScheduler::update() {
     const WeatherData* weatherData = (_wm && _wm->isAvailable()) ? &_wm->getData() : nullptr;
     bool weatherAvailable = (_wm && _wm->isAvailable());
     bool weatherStale = (_wm && _wm->isStale());
+    if (automationLocked) {
+        // Drop stale queued auto-runs while lock is active.
+        if (_qHead != _qTail) {
+            _qHead = _qTail = 0;
+            Serial.println("[Sched] Automatiksperre aktiv – Warteschlange geleert.");
+        }
+        return;
+    }
+
     for (int si = 0; si < sc.slotCount; si++) {
         WateringDecisionInput in;
         in.slotConfig = &sc;

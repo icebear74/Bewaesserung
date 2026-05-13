@@ -26,6 +26,7 @@
 static WebServerManager* g_wsm    = nullptr;
 static Application*      g_app    = nullptr;
 static WebServer*         g_server = nullptr;
+static unsigned long     g_leadMeasureStartMs[MAX_RELAY_COUNT] = {0};
 
 // ─── PSRAM allocator (shared by backup / runlog handlers) ────────────────────
 
@@ -122,6 +123,10 @@ static void handleApiWateringSimulate();
 static void handleApiWateringStatus();
 static void handleNotFound();
 static String formatDateTimeLocal(time_t ts);
+static String formatDateTimeLocalInput(time_t ts);
+static String formatRemainingDuration(time_t remainingSec);
+static time_t parseLocalDateTimeArg(const String& value);
+static int buildSortedPumpIndices(const HardwareConfig& hw, int* out, int outCap);
 static String getSlotLabel(const WateringSlot& slot, int idx);
 static String getPumpLabel(const HardwareConfig& hw, int idx);
 static const char* actionToText(WateringDecisionAction action);
@@ -287,13 +292,16 @@ static void handleStatus() {
             heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (!nextInfo) nextInfo = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
 
-        for (int i = 0; i < hw.relayCount; i++) {
+        int pumpOrder[MAX_RELAY_COUNT];
+        int pumpOrderCount = buildSortedPumpIndices(hw, pumpOrder, MAX_RELAY_COUNT);
+        for (int po = 0; po < pumpOrderCount; po++) {
+            int i = pumpOrder[po];
             RelayManager::PumpRuntimeInfo rt;
             bool haveRt = rm && rm->getPumpRuntimeInfo(i, rt);
             bool active = haveRt ? rt.running : (rm && rm->isActive(i));
             String status = active ? "<span style='color:#dc3545;font-weight:bold'>EIN 🔴</span>"
-                                   : "<span style='color:#1a6b3c'>AUS</span>";
-            if (!hw.pumps[i].enabled) status += " <span style='color:#777'>(deaktiviert)</span>";
+                                   : "<span style='color:#b8860b;font-weight:bold'>AUS 🟡</span>";
+            if (!hw.pumps[i].enabled) status += " <span style='color:#b8860b;font-weight:bold'>(deaktiviert)</span>";
 
             bool foundNext = false;
             time_t bestTs = 0;
@@ -329,8 +337,9 @@ static void handleStatus() {
                     reason += "<br><span style='color:#555'>Regeln: " + String(bestPlan.appliedRules) + "</span>";
                 }
             }
-            pumpHtml += "<tr><td>" + getPumpLabel(hw, i) + "</td><td>" + status + "</td><td>" + nextCell +
-                        "</td><td>" + action + (foundNext ? (" (" + String(bestPlan.durationSec) + "s)") : "") +
+            String rowStyle = (!active || !hw.pumps[i].enabled) ? " style='background:#fff7cc'" : "";
+            pumpHtml += "<tr" + rowStyle + "><td>" + getPumpLabel(hw, i) + "</td><td>" + status + "</td><td>" + nextCell +
+                        "</td><td>" + action + (foundNext ? (" (Bewässerung " + String(bestPlan.plannedDurationSec) + "s + Vorlauf " + String(bestPlan.leadTimeSec) + "s = " + String(bestPlan.durationSec) + "s)") : "") +
                         "</td><td>" + reason + "</td><td>" + lastRun + "</td></tr>";
         }
         free(nextInfo);
@@ -440,11 +449,15 @@ static void handleStatus() {
     }
     // ── Global next slot summary ───────────────────────────────────────────────
     {
+        String weatherDetails = weatherHtml;
         time_t now = time(nullptr);
+        bool automationLocked = cfg->isAutomationLocked(now);
+        time_t automationLockUntil = sc.automationLockUntil;
         time_t nextTs = 0;
         String nextName = "–";
         String nextReason = "Kein nächster Slot gefunden.";
         bool fallbackActive = false;
+        String nextSlotPlanHtml;
         NextSlotDecisionInfo* nextInfo2 = static_cast<NextSlotDecisionInfo*>(
             heap_caps_calloc(1, sizeof(NextSlotDecisionInfo), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (!nextInfo2) nextInfo2 = static_cast<NextSlotDecisionInfo*>(calloc(1, sizeof(NextSlotDecisionInfo)));
@@ -456,16 +469,66 @@ static void handleStatus() {
                     nextName = getSlotLabel(sc.slots[si], si);
                     nextReason = nextInfo2->result.reason;
                     fallbackActive = nextInfo2->result.usedFallbackTime;
+                    nextSlotPlanHtml = "";
+                    if (nextInfo2->result.planCount > 0) {
+                        bool slotHasRuntimeWarning =
+                            strstr(nextInfo2->result.warnings, "Gesamtlaufzeit") != nullptr ||
+                            strstr(nextInfo2->result.warnings, "Maximalzeit") != nullptr ||
+                            strstr(nextInfo2->result.warnings, "Wetteranpassung") != nullptr;
+                        String slotBg = automationLocked ? "#ffe5e5" : (slotHasRuntimeWarning ? "#fff7cc" : "#ffffff");
+                        nextSlotPlanHtml += "<div style='margin-top:8px;background:" + slotBg + ";padding:8px;border-radius:6px'><b>Slot-Übersicht:</b><div class='table-wrap'><table class='compact-table'>"
+                                            "<tr><th>Pumpe</th><th>Wetterprofil</th><th>Status</th><th>Laufzeit</th><th>Grund</th></tr>";
+                        bool usedPlan[MAX_SLOT_ASSIGNMENTS] = {false};
+                        for (int printed = 0; printed < nextInfo2->result.planCount; printed++) {
+                            int best = -1;
+                            String bestName = "";
+                            for (int i = 0; i < nextInfo2->result.planCount; i++) {
+                                if (usedPlan[i]) continue;
+                                String n = getPumpLabel(hw, nextInfo2->result.plan[i].pumpIndex);
+                                if (best < 0 || n.compareTo(bestName) < 0) {
+                                    best = i;
+                                    bestName = n;
+                                }
+                            }
+                            if (best < 0) break;
+                            usedPlan[best] = true;
+                            const WateringDecisionPumpPlan& p = nextInfo2->result.plan[best];
+                            nextSlotPlanHtml += "<tr><td>" + getPumpLabel(hw, p.pumpIndex) + "</td>";
+                            nextSlotPlanHtml += "<td>" + String(p.policySource) + "</td>";
+                            String slotStatus = String(actionToLabelDe(p.action));
+                            if (!hw.pumps[p.pumpIndex].enabled || p.action == WATER_ACTION_SKIP) {
+                                slotStatus = "<span style='background:#fff7cc;padding:1px 4px;border-radius:4px'>" + slotStatus + "</span>";
+                            }
+                            nextSlotPlanHtml += "<td>" + slotStatus + "</td>";
+                            nextSlotPlanHtml += "<td>Bewässerung " + String(p.plannedDurationSec) + "s + Vorlauf " + String(p.leadTimeSec) + "s = Gesamt " + String(p.durationSec) + "s</td>";
+                            nextSlotPlanHtml += "<td>" + String(p.reason) + "</td></tr>";
+                        }
+                        nextSlotPlanHtml += "</table></div></div>";
+                        if (slotHasRuntimeWarning) {
+                            nextSlotPlanHtml += "<div style='margin-top:6px;color:#8a6d00'><b>⚠ Warnhinweis:</b> "
+                                             + String(nextInfo2->result.warnings) + "</div>";
+                        }
+                    }
                 }
             }
             free(nextInfo2);
         }
-        weatherHtml = "<div style='margin-top:12px;padding:10px;border:1px solid #dde7dd;border-radius:6px;background:#f8fff8'>"
-                      "<b>Nächster Slot:</b> " + nextName + " @ " + formatDateTimeLocal(nextTs) +
+        String summaryBg = automationLocked ? "#ffe5e5" : "#f8fff8";
+        weatherHtml = "<div style='margin-top:12px;padding:10px;border:1px solid #dde7dd;border-radius:6px;background:" + summaryBg + "'>"
+                      "<b>Automatik-Hauptschalter:</b> " + String(automationLocked ? "GESPERRT" : "aktiv");
+        if (automationLocked) {
+            weatherHtml += " bis " + formatDateTimeLocal(automationLockUntil)
+                        + " (Rest " + formatRemainingDuration(automationLockUntil - now) + ")";
+        } else if (sc.automationLockEnabled && automationLockUntil > 0) {
+            weatherHtml += " (letzte Sperre abgelaufen: " + formatDateTimeLocal(automationLockUntil) + ")";
+        }
+        weatherHtml += "<br><span class='hint-text' title='Die Sperre betrifft nur den automatischen Scheduler. Testlauf/Simulation und manuelles Schalten auf der Hardware-Seite bleiben verfügbar.'>ⓘ Sperrt nur den Automatikplan.</span>"
+                      "<br><b>Nächster Slot:</b> " + nextName + " @ " + formatDateTimeLocal(nextTs) +
                       "<br><b>Entscheidung:</b> " + nextReason +
                       "<br><b>Fallback aktiv:</b> " + String(fallbackActive ? "ja" : "nein") +
-                      "<br><b>Wetter frisch:</b> " + String((wm && wm->isAvailable() && !wm->isStale()) ? "ja" : "nein") +
-                      "</div>" + weatherHtml;
+                      "<br><b>Wetter frisch:</b> " + String((wm && wm->isAvailable() && !wm->isStale()) ? "ja" : "nein");
+        if (nextSlotPlanHtml.length()) weatherHtml += nextSlotPlanHtml;
+        weatherHtml += "</div>" + weatherDetails;
     }
     page = replaceToken(page, "{weather_html}", weatherHtml);
 
@@ -711,7 +774,10 @@ static String buildPumpRowHtml(int i, const PumpEntry& p, const HardwareConfig& 
     r += "> Aktiv-LOW (invertiert)</label></div>";
     r += "<div class=\"form-col\"><label>Max. Test-Laufzeit (s)</label>";
     r += "<input type=\"number\" name=\"p"; r += i; r += "_maxRuntime\" value=\"";
-    r += p.maxRuntimeSec; r += "\" min=\"1\" max=\"3600\"></div></div>";
+    r += p.maxRuntimeSec; r += "\" min=\"1\" max=\"3600\"></div>";
+    r += "<div class=\"form-col\"><label title=\"Zusätzliche Vorlaufzeit bis Wasser am Schlauchende ankommt. Wird zur geplanten Pumpenlaufzeit addiert.\">Schlauch-/Vorlaufzeit (s) <span title=\"Beispiel: 30s geplant + 12s Vorlauf = 42s Gesamtlaufzeit.\">ⓘ</span></label>";
+    r += "<input type=\"number\" name=\"p"; r += i; r += "_leadTime\" value=\"";
+    r += p.leadTimeSec; r += "\" min=\"0\" max=\"3600\"></div></div>";
     r += "<label>Notizen</label><input type=\"text\" name=\"p"; r += i; r += "_notes\" value=\"";
     r += String(p.notes); r += "\" maxlength=\"63\">";
     r += "<div style=\"margin-top:8px\">";
@@ -719,6 +785,10 @@ static String buildPumpRowHtml(int i, const PumpEntry& p, const HardwareConfig& 
     r += "style=\"margin-right:4px;padding:5px 14px;background:#1a6b3c;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9654; Test EIN</button>";
     r += "<button type=\"button\" onclick=\"testRelay("; r += i; r += ",'off')\" ";
     r += "style=\"padding:5px 14px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9646; Test AUS</button>";
+    r += "<button type=\"button\" onclick=\"testRelay("; r += i; r += ",'measure_start')\" ";
+    r += "style=\"margin-left:4px;padding:5px 14px;background:#0b7285;color:#fff;border:none;border-radius:4px;cursor:pointer\">⏱ Vorlauf messen START</button>";
+    r += "<button type=\"button\" onclick=\"testRelay("; r += i; r += ",'measure_stop')\" ";
+    r += "style=\"margin-left:4px;padding:5px 14px;background:#495057;color:#fff;border:none;border-radius:4px;cursor:pointer\">✔ Vorlauf messen STOP</button>";
     r += " <span id=\"ts"; r += i; r += "\" style=\"font-size:12px;color:#666\"></span>";
     r += "</div></div>";
     return r;
@@ -833,6 +903,7 @@ static void handleSaveHardware() {
         snprintf(key, sizeof(key), "p%d_i2cChan", i);   p.i2cChannel    = (uint8_t)constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 15);
         snprintf(key, sizeof(key), "p%d_invert", i);    p.invertLogic   = g_server->hasArg(key);
         snprintf(key, sizeof(key), "p%d_maxRuntime", i);p.maxRuntimeSec = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 1, 3600) : 300;
+        snprintf(key, sizeof(key), "p%d_leadTime", i);  p.leadTimeSec   = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 0, 3600) : 0;
         snprintf(key, sizeof(key), "p%d_name", i);
         if (g_server->hasArg(key)) strlcpy(p.name, g_server->arg(key).c_str(), sizeof(p.name));
         snprintf(key, sizeof(key), "p%d_notes", i);
@@ -957,18 +1028,48 @@ static void handleRelayTest() {
     }
     bool ok = false;
     String msg;
+    HardwareConfig& hw = g_app->getConfigManager()->getHardwareConfig();
+    String pumpName = getPumpLabel(hw, relay);
     if (act == "on") {
         ok = rm->testActivateRelay(relay);
         if (ok) {
-            HardwareConfig& hw = g_app->getConfigManager()->getHardwareConfig();
             int timeout = hw.pumps[relay].maxRuntimeSec > 0 ? hw.pumps[relay].maxRuntimeSec : 30;
-            msg = "Pumpe " + String(relay + 1) + " EIN (Auto-AUS nach " + String(timeout) + "s)";
+            msg = pumpName + " EIN (Auto-AUS nach " + String(timeout) + "s)";
         } else {
-            msg = "Pumpe " + String(relay + 1) + ": Aktivierung fehlgeschlagen (deaktiviert oder kein Pin)";
+            msg = pumpName + ": Aktivierung fehlgeschlagen (deaktiviert oder kein Pin)";
         }
     } else if (act == "off") {
         ok = rm->testDeactivateRelay(relay);
-        msg = ok ? ("Pumpe " + String(relay + 1) + " AUS") : ("Pumpe " + String(relay + 1) + ": Fehler");
+        g_leadMeasureStartMs[relay] = 0;
+        msg = ok ? (pumpName + " AUS") : (pumpName + ": Fehler");
+    } else if (act == "measure_start") {
+        ok = rm->testActivateRelay(relay);
+        if (ok) {
+            g_leadMeasureStartMs[relay] = millis();
+            msg = "Messung gestartet: " + pumpName + " läuft. Mit STOP beenden.";
+        } else {
+            msg = "Messung konnte nicht gestartet werden.";
+        }
+    } else if (act == "measure_stop") {
+        unsigned long startMs = g_leadMeasureStartMs[relay];
+        ok = rm->testDeactivateRelay(relay);
+        if (!ok) {
+            msg = "Messung konnte nicht beendet werden.";
+        } else if (startMs == 0) {
+            msg = "Keine laufende Messung gefunden.";
+        } else {
+            unsigned long elapsedMs = millis() - startMs;
+            // Round milliseconds to nearest whole second for lead-time adoption.
+            int measuredSec = (int)((elapsedMs + 500UL) / 1000UL);
+            if (measuredSec < 0) measuredSec = 0;
+            measuredSec = constrain(measuredSec, 0, 3600);
+            g_leadMeasureStartMs[relay] = 0;
+            HardwareConfig& hw = g_app->getConfigManager()->getHardwareConfig();
+            hw.pumps[relay].leadTimeSec = measuredSec;
+            g_app->getConfigManager()->saveHardwareConfig();
+            g_app->requestConfigApply();
+            msg = "Messung beendet: " + String(measuredSec) + "s übernommen als Vorlaufzeit.";
+        }
     } else {
         msg = "Unbekannte Aktion";
     }
@@ -1045,6 +1146,12 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += String(summaryBuf);
     r += " | ";
     r += describeRepeatRule(slot);
+    time_t nowForLock = time(nullptr);
+    if (slot.lockEnabled && slot.lockUntil > 0 && nowForLock > 0 && nowForLock < slot.lockUntil) {
+        r += " | <span style='color:#b26a00'>Slot gesperrt bis ";
+        r += formatDateTimeLocal(slot.lockUntil);
+        r += "</span>";
+    }
     r += "</div>";
     r += "<div id=\"slotBody"; r += si; r += "\" style=\"display:none\">";
     // Enabled + Name row
@@ -1111,6 +1218,20 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "_intervalDays\" value=\""; r += slot.intervalDays; r += "\" min=\"1\" max=\"90\"></div>";
     r += "<div class=\"form-col\"><label title=\"Ab diesem Datum wird das Intervall gezählt.\">Startdatum (Anker)</label><input type=\"date\" name=\"s"; r += si;
     r += "_intervalAnchor\" value=\""; r += epochDayToDateString(slot.intervalAnchorDay); r += "\"></div></div>";
+    int slotLockHours = 24;
+    if (slot.lockEnabled && slot.lockUntil > 0) {
+        time_t nowLocal = time(nullptr);
+        if (nowLocal > 0 && slot.lockUntil > nowLocal) {
+            slotLockHours = max(1, (int)((slot.lockUntil - nowLocal + 3599) / 3600));
+        }
+    }
+    r += "<div class=\"form-row\">";
+    r += "<div class=\"form-col\"><label title=\"Sperrt nur diesen Slot temporär. Andere Slots laufen normal.\"><input type=\"checkbox\" name=\"s"; r += si; r += "_lockEnabled\"";
+    if (slot.lockEnabled) r += " checked";
+    r += "> Slot temporär sperren</label></div>";
+    r += "<div class=\"form-col\"><label title=\"Dauer ab jetzt in Stunden für diese Slot-Sperre.\">Sperrdauer (h)</label><input type=\"number\" name=\"s";
+    r += si; r += "_lockHours\" value=\""; r += slotLockHours; r += "\" min=\"1\" max=\"168\"></div>";
+    r += "</div>";
     r += "</div></div>";  // slot-entry + slotBody
     return r;
 }
@@ -1123,6 +1244,24 @@ static String getSlotLabel(const WateringSlot& slot, int idx) {
 static String getPumpLabel(const HardwareConfig& hw, int idx) {
     if (idx < 0 || idx >= hw.relayCount) return "Ungültige Pumpe";
     return hw.pumps[idx].name[0] ? String(hw.pumps[idx].name) : ("Pumpe " + String(idx + 1));
+}
+
+static int buildSortedPumpIndices(const HardwareConfig& hw, int* out, int outCap) {
+    if (!out || outCap <= 0) return 0;
+    int count = min(hw.relayCount, outCap);
+    for (int i = 0; i < count; i++) out[i] = i;
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            String a = getPumpLabel(hw, out[i]);
+            String b = getPumpLabel(hw, out[j]);
+            if (a.compareTo(b) > 0) {
+                int tmp = out[i];
+                out[i] = out[j];
+                out[j] = tmp;
+            }
+        }
+    }
+    return count;
 }
 
 static String getWeatherTemplateLabel(const SlotConfig& sc, int idx) {
@@ -1392,6 +1531,8 @@ static String buildWeatherTemplateRowHtml(int wi, const WeatherTemplate& wt) {
 
 static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig& hw) {
     String html;
+    int pumpOrder[MAX_RELAY_COUNT];
+    int pumpOrderCount = buildSortedPumpIndices(hw, pumpOrder, MAX_RELAY_COUNT);
     int displayIdx = 0;
     for (int ai = 0; ai < sc.assignCount; ai++) {
         const SlotPumpAssignment& a = sc.assignments[ai];
@@ -1427,12 +1568,13 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
         html += "<div class=\"form-col\"><label title=\"Die konkrete Pumpe, die bei dieser Zuweisung laufen soll.\">Pumpe</label><select name=\"as";
         html += displayIdx;
         html += "_pump\">";
-        for (int pi = 0; pi < hw.relayCount; pi++) {
+        for (int poi = 0; poi < pumpOrderCount; poi++) {
+            int pi = pumpOrder[poi];
             html += "<option value=\""; html += pi; html += "\"";
             if (a.pumpIndex == (uint8_t)pi) html += " selected";
             html += ">";
             html += getPumpLabel(hw, pi);
-        html += "</option>";
+            html += "</option>";
         }
         html += "</select></div>";
 
@@ -1465,26 +1607,43 @@ static String buildAssignmentRowsHtml(const SlotConfig& sc, const HardwareConfig
 }
 
 static String buildPumpSlotOverviewHtml(const SlotConfig& sc, const HardwareConfig& hw) {
-    if (hw.relayCount == 0) {
-        return "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
+    if (sc.slotCount == 0) {
+        return "<p style='color:#999;font-style:italic'>Keine Slots konfiguriert.</p>";
     }
-    String html = "<div class='table-wrap'><table class='compact-table'><tr><th>Pumpe</th><th>Zugewiesene Kombinationen</th></tr>";
-    for (int pi = 0; pi < hw.relayCount; pi++) {
-        html += "<tr><td>";
-        html += getPumpLabel(hw, pi);
-        html += "</td><td>";
+    int pumpOrder[MAX_RELAY_COUNT];
+    int pumpOrderCount = buildSortedPumpIndices(hw, pumpOrder, MAX_RELAY_COUNT);
+    String html = "<div class='table-wrap'><table class='compact-table'><tr><th>Slot</th><th>Zugewiesene Pumpen</th></tr>";
+    for (int si = 0; si < sc.slotCount; si++) {
+        html += "<tr><td><b>";
+        html += getSlotLabel(sc.slots[si], si);
+        html += "</b></td><td>";
         bool found = false;
-        for (int ai = 0; ai < sc.assignCount; ai++) {
-            const SlotPumpAssignment& a = sc.assignments[ai];
-            if (a.pumpIndex != (uint8_t)pi || a.slotIndex >= (uint8_t)sc.slotCount) continue;
-            if (found) html += "<br>";
-            html += getSlotLabel(sc.slots[a.slotIndex], a.slotIndex);
-            html += " · ";
-            html += getWeatherTemplateLabel(sc, a.weatherTemplateIndex);
-            html += " (";
-            html += a.durationSec;
-            html += "s)";
-            found = true;
+        for (int poi = 0; poi < pumpOrderCount; poi++) {
+            int pi = pumpOrder[poi];
+            for (int ai = 0; ai < sc.assignCount; ai++) {
+                const SlotPumpAssignment& a = sc.assignments[ai];
+                if (a.slotIndex != (uint8_t)si || a.pumpIndex != (uint8_t)pi || a.pumpIndex >= (uint8_t)hw.relayCount) continue;
+                if (found) html += "<br>";
+                html += "• ";
+                if (!hw.pumps[a.pumpIndex].enabled) {
+                    html += "<span style='background:#fff7cc;padding:1px 4px;border-radius:4px'>";
+                }
+                html += getPumpLabel(hw, a.pumpIndex);
+                if (!hw.pumps[a.pumpIndex].enabled) {
+                    html += " (inaktiv)</span>";
+                }
+                html += " · ";
+                html += getWeatherTemplateLabel(sc, a.weatherTemplateIndex);
+                int lead = hw.pumps[a.pumpIndex].leadTimeSec;
+                html += " (Bewässerung ";
+                html += a.durationSec;
+                html += "s + Vorlauf ";
+                html += lead;
+                html += "s = Gesamt ";
+                html += (a.durationSec + lead);
+                html += "s)";
+                found = true;
+            }
         }
         if (!found) html += "<span style='color:#999'>Keine Zuweisung</span>";
         html += "</td></tr>";
@@ -1502,6 +1661,9 @@ static void handleConfigWatering() {
 
     // Status line
     String wateringStatus;
+    time_t nowLocal = time(nullptr);
+    bool autoLockActive = cfg->isAutomationLocked(nowLocal);
+    time_t autoLockUntil = sc.automationLockUntil;
     if (cfg->isWateringConfigValid()) {
         char buf[100];
         snprintf(buf, sizeof(buf),
@@ -1512,6 +1674,27 @@ static void handleConfigWatering() {
         wateringStatus = "<p style='color:#dc3545;margin-top:8px'>&#10007; Kein g&#252;ltiger Plan: Pumpen konfigurieren, Slots anlegen und Zuweisungen speichern.</p>";
     }
     page = replaceToken(page, "{watering_status}", wateringStatus);
+    String lockHtml;
+    if (autoLockActive) {
+        lockHtml = "<div class='alert-warning' style='margin-top:8px'><b>⚠ Automatik gesperrt</b> bis ";
+        lockHtml += formatDateTimeLocal(autoLockUntil);
+        lockHtml += " (Rest: ";
+        lockHtml += formatRemainingDuration(autoLockUntil - nowLocal);
+        lockHtml += ").<br><span class='hint-text'>Hinweis: Testlauf/Simulation und manuelles Hardware-Schalten bleiben erlaubt.</span></div>";
+    } else if (sc.automationLockEnabled && autoLockUntil > 0) {
+        lockHtml = "<div class='alert-info' style='margin-top:8px'>Automatik-Sperre war bis ";
+        lockHtml += formatDateTimeLocal(autoLockUntil);
+        lockHtml += " gesetzt und ist bereits abgelaufen.</div>";
+    } else {
+        lockHtml = "<div class='alert-info' style='margin-top:8px'>Automatik aktiv. Keine temporäre Sperre gesetzt.</div>";
+    }
+    page = replaceToken(page, "{automation_lock_html}", lockHtml);
+    page = replaceToken(page, "{automation_lock_checked}", sc.automationLockEnabled ? "checked" : "");
+    int lockHoursDefault = 24;
+    if (sc.automationLockEnabled && sc.automationLockUntil > nowLocal && nowLocal > 0) {
+        lockHoursDefault = max(1, (int)((sc.automationLockUntil - nowLocal + 3599) / 3600));
+    }
+    page = replaceToken(page, "{automation_lock_hours}", String(lockHoursDefault));
 
     // Pump names JSON array for JavaScript assignment editor
     {
@@ -1589,6 +1772,20 @@ static void handleSaveWatering() {
     SlotConfig newSc;
     newSc.slotCount  = 0;
     newSc.assignCount = 0;
+    newSc.automationLockEnabled = g_server->hasArg("automationLockEnabled");
+    newSc.automationLockUntil = 0;
+    if (newSc.automationLockEnabled) {
+        int lockHours = g_server->hasArg("automationLockHours")
+                            ? constrain(g_server->arg("automationLockHours").toInt(), 0, 168)
+                            : 24;
+        if (lockHours <= 0) lockHours = 24;
+        time_t nowLocal = time(nullptr);
+        if (nowLocal > 0) {
+            newSc.automationLockUntil = nowLocal + ((time_t)lockHours * 3600);
+        } else {
+            newSc.automationLockEnabled = false;
+        }
+    }
     int slotRemap[MAX_SLOTS];
     for (int i = 0; i < MAX_SLOTS; i++) slotRemap[i] = -1;
 
@@ -1665,6 +1862,19 @@ static void handleSaveWatering() {
                 s.intervalAnchorDay = (uint16_t)constrain(
                     daysFromCivil(nt.tm_year + 1900, (unsigned)(nt.tm_mon + 1), (unsigned)nt.tm_mday),
                     0, 65535);
+            }
+        }
+        snprintf(key, sizeof(key), "s%d_lockEnabled", si);
+        s.lockEnabled = g_server->hasArg(key);
+        s.lockUntil = 0;
+        if (s.lockEnabled) {
+            snprintf(key, sizeof(key), "s%d_lockHours", si);
+            int lockHours = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 1, 168) : 24;
+            time_t nowLocal = time(nullptr);
+            if (nowLocal > 0) {
+                s.lockUntil = nowLocal + ((time_t)lockHours * 3600);
+            } else {
+                s.lockEnabled = false;
             }
         }
         newSc.slotCount++;
@@ -1823,6 +2033,30 @@ static String formatDateTimeLocal(time_t ts) {
     return String(buf);
 }
 
+static String formatDateTimeLocalInput(time_t ts) {
+    if (ts <= 0) return "";
+    struct tm t;
+    localtime_r(&ts, &t);
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d",
+             t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min);
+    return String(buf);
+}
+
+static String formatRemainingDuration(time_t remainingSec) {
+    if (remainingSec <= 0) return "0m";
+    if (remainingSec < 60) return "<1m";
+    long totalMin = (long)(remainingSec / 60);
+    long d = totalMin / (24 * 60);
+    long h = (totalMin % (24 * 60)) / 60;
+    long m = totalMin % 60;
+    char buf[32];
+    if (d > 0) snprintf(buf, sizeof(buf), "%ldt %ldh %ldm", d, h, m);
+    else if (h > 0) snprintf(buf, sizeof(buf), "%ldh %ldm", h, m);
+    else snprintf(buf, sizeof(buf), "%ldm", m);
+    return String(buf);
+}
+
 static bool findPlanForPump(const WateringDecisionResult& res, int pumpIndex, WateringDecisionPumpPlan& outPlan) {
     for (int i = 0; i < res.planCount; i++) {
         if (res.plan[i].pumpIndex == (uint8_t)pumpIndex) {
@@ -1977,6 +2211,7 @@ static void handleApiWateringSimulate() {
     WateringDecisionEngine::evaluateSlot(in, *result);
 
     JsonDocument doc;
+    bool automationLocked = cfg->isAutomationLocked(simNow > 0 ? simNow : time(nullptr));
     doc["ok"] = result->validInput;
     doc["slotIndex"] = result->slotIndex;
     doc["action"] = actionToText(result->action);
@@ -1988,6 +2223,8 @@ static void handleApiWateringSimulate() {
     doc["triggerTime"] = formatTimeHM(result->triggerTime);
     doc["triggerSource"] = result->triggerSource;
     doc["totalDurationSec"] = result->totalDurationSec;
+    doc["automationLockActive"] = automationLocked;
+    doc["automationLockUntil"] = formatDateTimeLocal(cfg->getAutomationLockUntil());
     doc["planCount"] = result->planCount;
     if (weatherPtr) {
         doc["sunrise"] = formatTimeHM(weatherPtr->sunrise);
@@ -2008,6 +2245,8 @@ static void handleApiWateringSimulate() {
         p["pumpIndex"] = result->plan[i].pumpIndex;
         p["pumpName"] = getPumpLabel(hw, result->plan[i].pumpIndex);
         p["baseDurationSec"] = result->plan[i].baseDurationSec;
+        p["plannedDurationSec"] = result->plan[i].plannedDurationSec;
+        p["leadTimeSec"] = result->plan[i].leadTimeSec;
         p["durationSec"] = result->plan[i].durationSec;
         p["adjustmentPercent"] = result->plan[i].adjustmentPercent;
         p["action"] = actionToText(result->plan[i].action);
@@ -2094,11 +2333,17 @@ static void handleApiWateringStatus() {
     bool weatherStale = (wm && wm->isStale());
 
     JsonDocument doc;
+    bool automationLocked = cfg->isAutomationLocked(now);
+    time_t automationLockUntil = cfg->getAutomationLockUntil();
     doc["ok"] = true;
     doc["nowEpoch"] = (long)now;
     doc["now"] = formatDateTimeLocal(now);
     doc["armed"] = cfg->isWateringConfigValid();
     doc["state"] = sm ? sm->getStateString() : "unknown";
+    doc["automationLockActive"] = automationLocked;
+    doc["automationLockUntilEpoch"] = (long)automationLockUntil;
+    doc["automationLockUntil"] = formatDateTimeLocal(automationLockUntil);
+    doc["automationLockRemainingSec"] = automationLocked ? (long)(automationLockUntil - now) : 0L;
     doc["schedulerBusy"] = sched ? sched->isBusy() : false;
     doc["activePump"] = sched ? sched->getActivePump() : -1;
 
@@ -2134,6 +2379,9 @@ static void handleApiWateringStatus() {
         s["slotIndex"] = si;
         s["name"] = getSlotLabel(slot, si);
         s["enabled"] = slot.enabled;
+        bool slotLockActive = slot.lockEnabled && slot.lockUntil > 0 && now < slot.lockUntil;
+        s["lockActive"] = slotLockActive;
+        s["lockUntil"] = formatDateTimeLocal(slot.lockUntil);
         s["repeatMode"] = slot.repeatMode == REPEAT_INTERVAL_DAYS ? "interval" : "weekdays";
         s["repeatRule"] = describeRepeatRule(slot);
         s["nextTrigger"] = (nextInfo && nextInfo->found) ? formatDateTimeLocal(nextInfo->triggerTime) : String("–");
@@ -2149,6 +2397,8 @@ static void handleApiWateringStatus() {
                 p["pumpIndex"] = nextInfo->result.plan[i].pumpIndex;
                 p["pumpName"] = getPumpLabel(hw, nextInfo->result.plan[i].pumpIndex);
                 p["action"] = actionToText(nextInfo->result.plan[i].action);
+                p["plannedDurationSec"] = nextInfo->result.plan[i].plannedDurationSec;
+                p["leadTimeSec"] = nextInfo->result.plan[i].leadTimeSec;
                 p["durationSec"] = nextInfo->result.plan[i].durationSec;
                 p["baseDurationSec"] = nextInfo->result.plan[i].baseDurationSec;
                 p["adjustmentPercent"] = nextInfo->result.plan[i].adjustmentPercent;
@@ -2167,7 +2417,10 @@ static void handleApiWateringStatus() {
     doc["nextSlotTime"] = nextGlobalTs > 0 ? formatDateTimeLocal(nextGlobalTs) : String("–");
 
     JsonArray pumpsArr = doc["pumps"].to<JsonArray>();
-    for (int pi = 0; pi < hw.relayCount; pi++) {
+    int pumpOrder[MAX_RELAY_COUNT];
+    int pumpOrderCount = buildSortedPumpIndices(hw, pumpOrder, MAX_RELAY_COUNT);
+    for (int poi = 0; poi < pumpOrderCount; poi++) {
+        int pi = pumpOrder[poi];
         RelayManager::PumpRuntimeInfo rt;
         bool haveRt = rm && rm->getPumpRuntimeInfo(pi, rt);
         JsonObject p = pumpsArr.add<JsonObject>();
@@ -2204,6 +2457,8 @@ static void handleApiWateringStatus() {
         p["nextTime"] = foundPumpNext ? formatDateTimeLocal(bestTs) : String("–");
         p["nextAction"] = foundPumpNext ? String(actionToText(bestPlan.action)) : String("skip");
         p["nextReason"] = foundPumpNext ? String(bestPlan.reason) : String("Keine Zuweisung.");
+        p["nextPlannedDurationSec"] = foundPumpNext ? bestPlan.plannedDurationSec : 0;
+        p["nextLeadTimeSec"] = foundPumpNext ? bestPlan.leadTimeSec : 0;
         p["nextDurationSec"] = foundPumpNext ? bestPlan.durationSec : 0;
         p["adjustmentPercent"] = foundPumpNext ? bestPlan.adjustmentPercent : 0;
         p["triggerSource"] = foundPumpNext ? String(bestTriggerSource) : String("");
@@ -2216,6 +2471,7 @@ static void handleApiWateringStatus() {
     if (weatherStale) warnings.add("Wetterdaten sind veraltet.");
     if (!weatherAvailable) warnings.add("Wetterdaten sind nicht verfügbar.");
     if (!cfg->isWateringConfigValid()) warnings.add("Bewässerungsplan ist nicht scharf (armed=false).");
+    if (automationLocked) warnings.add("Automatik-Hauptschalter ist aktiv, Scheduler-Ausführung ist gesperrt.");
 
     String json;
     serializeJson(doc, json);

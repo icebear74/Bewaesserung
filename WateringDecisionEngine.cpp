@@ -417,6 +417,18 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         return;
     }
 
+    if (slot.lockEnabled && slot.lockUntil > 0 && input.nowLocal < slot.lockUntil) {
+        char untilBuf[32];
+        struct tm lockTm;
+        localtime_r(&slot.lockUntil, &lockTm);
+        snprintf(untilBuf, sizeof(untilBuf), "%02d.%02d %02d:%02d",
+                 lockTm.tm_mday, lockTm.tm_mon + 1, lockTm.tm_hour, lockTm.tm_min);
+        snprintf(out.reason, sizeof(out.reason),
+                 "Slot temporär gesperrt bis %s.", untilBuf);
+        out.action = WATER_ACTION_SKIP;
+        return;
+    }
+
     out.dayMatched = dayMatches(slot, input.nowLocal);
     if (input.enforceDayMatch && !out.dayMatched) {
         if (slot.repeatMode == REPEAT_INTERVAL_DAYS) {
@@ -481,7 +493,9 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         p.assignmentIndex = (uint8_t)ai;
         p.pumpIndex       = asgn.pumpIndex;
         p.baseDurationSec = asgn.durationSec;
-        p.durationSec     = asgn.durationSec;
+        p.plannedDurationSec = asgn.durationSec;
+        p.leadTimeSec     = input.hardwareConfig->pumps[p.pumpIndex].leadTimeSec;
+        p.durationSec     = asgn.durationSec + p.leadTimeSec;
         p.adjustmentPercent = 0;
         p.action          = WATER_ACTION_EXECUTE;
         setText(p.reason, sizeof(p.reason), "Wird ausgeführt.");
@@ -490,6 +504,8 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
 
         if (!input.hardwareConfig->pumps[p.pumpIndex].enabled) {
             p.action = WATER_ACTION_SKIP;
+            p.plannedDurationSec = 0;
+            p.leadTimeSec = 0;
             p.durationSec = 0;
             setText(p.reason, sizeof(p.reason), "Pumpe ist deaktiviert.");
             skippedCount++;
@@ -547,6 +563,8 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
 
             if (skipMatched) {
                 p.action = WATER_ACTION_SKIP;
+                p.plannedDurationSec = 0;
+                p.leadTimeSec = 0;
                 p.durationSec = 0;
                 if (matchedSkipCount == 1) {
                     setText(p.reason, sizeof(p.reason), "Ausgesetzt durch Wetterregel.");
@@ -580,26 +598,19 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                 p.adjustmentPercent = adjustmentDelta;
                 long adjusted = (long)p.baseDurationSec * (long)(100 + adjustmentDelta) / 100L;
                 if (adjusted < 1) adjusted = 1;
-
-                int pumpMaxRuntime = input.hardwareConfig->pumps[p.pumpIndex].maxRuntimeSec;
-                if (pumpMaxRuntime > 0 && adjusted > pumpMaxRuntime) {
-                    adjusted = pumpMaxRuntime;
-                    appendText(p.appliedRules, sizeof(p.appliedRules), "Auf Pumpen-Maximalzeit begrenzt");
-                }
-
-                p.durationSec = (int)adjusted;
-                if (p.durationSec < p.baseDurationSec) {
+                p.plannedDurationSec = (int)adjusted;
+                if (p.plannedDurationSec < p.baseDurationSec) {
                     p.action = WATER_ACTION_REDUCE;
                     reducedCount++;
                     snprintf(p.reason, sizeof(p.reason),
                              "Laufzeit um %d%% reduziert (%ds statt %ds).",
-                             -adjustmentDelta, p.durationSec, p.baseDurationSec);
-                } else if (p.durationSec > p.baseDurationSec) {
+                             -adjustmentDelta, p.plannedDurationSec, p.baseDurationSec);
+                } else if (p.plannedDurationSec > p.baseDurationSec) {
                     p.action = WATER_ACTION_EXTEND;
                     extendedCount++;
                     snprintf(p.reason, sizeof(p.reason),
                              "Laufzeit um %+d%% verlängert (%ds statt %ds).",
-                             adjustmentDelta, p.durationSec, p.baseDurationSec);
+                             adjustmentDelta, p.plannedDurationSec, p.baseDurationSec);
                 } else {
                     p.action = WATER_ACTION_EXECUTE;
                     setText(p.reason, sizeof(p.reason),
@@ -609,6 +620,45 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         }
 
         if (p.action != WATER_ACTION_SKIP) {
+            if (p.adjustmentPercent != 0) {
+                char wxWarn[160];
+                snprintf(wxWarn, sizeof(wxWarn),
+                         "Pumpe %u: Wetteranpassung %+d%% (Basis %ds -> Bewässerung %ds).",
+                         (unsigned)(p.pumpIndex + 1), p.adjustmentPercent,
+                         p.baseDurationSec, p.plannedDurationSec);
+                appendText(out.warnings, sizeof(out.warnings), wxWarn, " | ");
+            }
+            int pumpMaxRuntime = input.hardwareConfig->pumps[p.pumpIndex].maxRuntimeSec;
+            p.durationSec = p.plannedDurationSec + p.leadTimeSec;
+            if (pumpMaxRuntime > 0 && p.durationSec > pumpMaxRuntime) {
+                int requestedTotal = p.durationSec;
+                p.durationSec = pumpMaxRuntime;
+                char maxWarn[160];
+                snprintf(maxWarn, sizeof(maxWarn),
+                         "Pumpe %u: Gesamtlaufzeit %ds überschreitet Maximum %ds.",
+                         (unsigned)(p.pumpIndex + 1), requestedTotal, pumpMaxRuntime);
+                appendText(out.warnings, sizeof(out.warnings), maxWarn, " | ");
+                int adjustedPlanned = p.durationSec - p.leadTimeSec;
+                if (adjustedPlanned <= 0) {
+                    p.action = WATER_ACTION_SKIP;
+                    p.plannedDurationSec = 0;
+                    p.leadTimeSec = 0;
+                    p.durationSec = 0;
+                    setText(p.reason, sizeof(p.reason),
+                            "Ausgesetzt: Pumpen-Maximalzeit ist kleiner oder gleich der Vorlaufzeit.");
+                    appendText(p.appliedRules, sizeof(p.appliedRules), "Maximalzeit <= Vorlaufzeit");
+                    appendText(out.warnings, sizeof(out.warnings),
+                               "Konfiguration prüfen: Maximalzeit <= Vorlaufzeit.", " | ");
+                    skippedCount++;
+                    continue;
+                }
+                if (adjustedPlanned < p.plannedDurationSec) {
+                    p.plannedDurationSec = adjustedPlanned;
+                }
+                appendText(p.appliedRules, sizeof(p.appliedRules), "Auf Pumpen-Maximalzeit begrenzt");
+                appendText(p.reason, sizeof(p.reason),
+                           "Warnung: Gesamtlaufzeit wurde auf Pumpen-Maximalzeit begrenzt.", " ");
+            }
             runnableCount++;
             out.totalDurationSec += p.durationSec;
         }
