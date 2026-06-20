@@ -2911,20 +2911,44 @@ static void handleApiWateringSimulateTimeline() {
     JsonArray steps = doc["steps"].to<JsonArray>();
     time_t endTime = now + (time_t)horizonHours * 3600;
 
-    for (time_t simTime = now; simTime <= endTime; simTime += (time_t)stepMinutes * 60) {
-        JsonObject step = steps.add<JsonObject>();
-        step["time"]  = formatDateTimeLocal(simTime);
-        step["epoch"] = (long)simTime;
+    // Compute midnight of the current local day so we can iterate day by day.
+    struct tm midnightTm;
+    localtime_r(&now, &midnightTm);
+    midnightTm.tm_hour  = 0;
+    midnightTm.tm_min   = 0;
+    midnightTm.tm_sec   = 0;
+    midnightTm.tm_isdst = -1;
+    time_t dayStart = mktime(&midnightTm);
 
-        JsonArray slotResults = step["slots"].to<JsonArray>();
+    // +2 to ensure we cover the full horizon even across day boundaries.
+    int daysToCheck = horizonHours / 24 + 2;
+
+    // Instead of stepping through time in fixed increments (which misses most
+    // trigger minutes), enumerate the exact trigger time for every (slot × day)
+    // pair and evaluate there.  This guarantees every scheduled event is found
+    // regardless of how the trigger minutes are aligned.
+    for (int dayOffset = 0; dayOffset < daysToCheck; dayOffset++) {
+        // Use noon of that day so computeTriggerTime extracts the right date.
+        time_t dayNoon = dayStart + (time_t)dayOffset * 86400 + (time_t)12 * 3600;
+
         for (int si = 0; si < sc.slotCount; si++) {
+            const WateringSlot& slot = sc.slots[si];
+            if (!slot.enabled) continue;
+            if (slot.triggerType == TRIGGER_MANUAL) continue;
+
+            bool usedFallback = false;
+            time_t trigTime = WateringDecisionEngine::computeTriggerTime(
+                slot, dayNoon, weatherData, weatherAvailable, &usedFallback);
+            if (trigTime == 0) continue;
+            if (trigTime < now || trigTime > endTime) continue;
+
             WateringDecisionInput in;
             in.slotConfig           = &sc;
             in.hardwareConfig       = &hw;
             in.weatherData          = weatherData;
             in.weatherAvailable     = weatherAvailable;
             in.weatherStale         = weatherStale;
-            in.nowLocal             = simTime;
+            in.nowLocal             = trigTime;
             in.slotIndex            = si;
             in.enforceDayMatch      = true;
             in.enforceTriggerMinute = true;
@@ -2933,6 +2957,11 @@ static void handleApiWateringSimulateTimeline() {
 
             if (!result->validInput || !result->triggerMatched) continue;
 
+            JsonObject step = steps.add<JsonObject>();
+            step["time"]  = formatDateTimeLocal(trigTime);
+            step["epoch"] = (long)trigTime;
+
+            JsonArray slotResults = step["slots"].to<JsonArray>();
             JsonObject sr = slotResults.add<JsonObject>();
             sr["slotIndex"]        = si;
             sr["slotName"]         = getSlotLabel(sc.slots[si], si);
