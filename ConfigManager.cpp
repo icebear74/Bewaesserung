@@ -348,6 +348,12 @@ bool ConfigManager::saveHardwareConfig() {
     doc["relayCount"]    = _hardwareConfig.relayCount;
     doc["relayInverted"] = _hardwareConfig.relayInverted;
     doc["displayMode"]   = _hardwareConfig.displayMode;
+    // Human-readable label for displayMode (informational, not parsed on load)
+    {
+        static const char* displayModeLabels[] = {"OLED (SSD1306)", "TFT (ST7735)", "OLED + TFT"};
+        uint8_t dm = _hardwareConfig.displayMode;
+        if (dm <= 2) doc["displayMode_label"] = displayModeLabels[dm];
+    }
     doc["tftCsPin"]      = _hardwareConfig.tftCsPin;
     doc["tftRstPin"]     = _hardwareConfig.tftRstPin;
     doc["tftDcPin"]      = _hardwareConfig.tftDcPin;
@@ -358,6 +364,8 @@ bool ConfigManager::saveHardwareConfig() {
         eo["enabled"]    = e.enabled;
         eo["name"]       = e.name;
         eo["chipType"]   = e.chipType;
+        // Human-readable label for chipType (informational, not parsed on load)
+        eo["chipType_label"] = (e.chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575 (16 Ports)" : "PCF8574 (8 Ports)";
         eo["i2cAddress"] = e.i2cAddress;
     }
     JsonArray pumps = doc["pumps"].to<JsonArray>();
@@ -367,6 +375,8 @@ bool ConfigManager::saveHardwareConfig() {
         po["enabled"]       = p.enabled;
         po["name"]          = p.name;
         po["outputType"]    = p.outputType;
+        // Human-readable label for outputType (informational, not parsed on load)
+        po["outputType_label"] = (p.outputType == OUTPUT_TYPE_PCF8574) ? "PCF8574 I2C-Expander" : "Direkt GPIO";
         po["pin"]           = p.pin;
         po["expanderIndex"] = p.expanderIndex;
         po["i2cChannel"]    = p.i2cChannel;
@@ -586,6 +596,22 @@ bool ConfigManager::saveSlotConfig() {
     JsonDocument doc;
     doc["automationLockEnabled"] = _slotConfig.automationLockEnabled;
     doc["automationLockUntil"]   = (long)_slotConfig.automationLockUntil;
+    // Helper: build a comma-separated string of active weekday names from bitmask
+    // bit0=Mo, bit1=Di, bit2=Mi, bit3=Do, bit4=Fr, bit5=Sa, bit6=So
+    auto makeDaysLabel = [](uint8_t daysMask, char* buf, size_t bufLen) {
+        static const char* dayNames[] = {"Mo","Di","Mi","Do","Fr","Sa","So"};
+        buf[0] = '\0';
+        bool first = true;
+        for (int d = 0; d < 7; d++) {
+            if (daysMask & (1 << d)) {
+                if (!first) strncat(buf, ", ", bufLen - strlen(buf) - 1);
+                strncat(buf, dayNames[d], bufLen - strlen(buf) - 1);
+                first = false;
+            }
+        }
+        if (first) strncat(buf, "–", bufLen - strlen(buf) - 1);
+    };
+
     JsonArray sArr = doc["slots"].to<JsonArray>();
     for (int i = 0; i < _slotConfig.slotCount; i++) {
         const WateringSlot& s = _slotConfig.slots[i];
@@ -595,16 +621,25 @@ bool ConfigManager::saveSlotConfig() {
         so["triggerType"]    = s.triggerType;
         // Human-readable labels (informational, not parsed on load)
         {
-            static const char* triggerLabels[] = {"Feste Uhrzeit","Sonnenaufgang","Sonnenuntergang","Mittagszeit","Offset"};
-            if (s.triggerType <= 4) so["triggerType_label"] = triggerLabels[s.triggerType];
+            static const char* triggerLabels[] = {"Feste Uhrzeit","Sonnenaufgang","Sonnenuntergang","Mittagszeit","Offset","Manuell"};
+            if (s.triggerType <= 5) so["triggerType_label"] = triggerLabels[s.triggerType];
         }
-        so["repeatMode_label"] = (s.repeatMode == REPEAT_INTERVAL_DAYS) ? "Intervall (alle N Tage)" : "Wochentage";
         so["fixedHour"]      = s.fixedHour;
         so["fixedMinute"]    = s.fixedMinute;
         so["offsetMinutes"]  = s.offsetMinutes;
         so["offsetBase"]     = s.offsetBase;
+        {
+            static const char* offsetBaseLabels[] = {"Sonnenaufgang","Sonnenuntergang","Mittagszeit"};
+            if (s.offsetBase <= 2) so["offsetBase_label"] = offsetBaseLabels[s.offsetBase];
+        }
         so["repeatMode"]     = s.repeatMode;
+        so["repeatMode_label"] = (s.repeatMode == REPEAT_INTERVAL_DAYS) ? "Intervall (alle N Tage)" : "Wochentage";
         so["days"]           = s.days;
+        {
+            char daysLabelBuf[64];
+            makeDaysLabel(s.days, daysLabelBuf, sizeof(daysLabelBuf));
+            so["days_label"] = daysLabelBuf;
+        }
         so["intervalDays"]   = s.intervalDays;
         so["intervalAnchorDay"] = s.intervalAnchorDay;
         so["lockEnabled"]    = s.lockEnabled;
@@ -628,8 +663,25 @@ bool ConfigManager::saveSlotConfig() {
                 JsonObject ro = rules.add<JsonObject>();
                 ro["enabled"] = rule.enabled;
                 ro["actionType"] = rule.actionType;
+                {
+                    static const char* actionLabels[] = {"Überspringen","Laufzeit reduzieren","Laufzeit erhöhen"};
+                    if (rule.actionType <= 2) ro["actionType_label"] = actionLabels[rule.actionType];
+                }
                 ro["metric"] = rule.metric;
+                {
+                    static const char* metricLabels[] = {
+                        "Aktuelle Temperatur","Tagesmax. Temperatur",
+                        "Aktueller Regen (mm)","Aktuelle Regenwahrsch. (%)",
+                        "Tagesregen (mm)","Tages-Regenwahrsch. (%)",
+                        "Vorhersage Regen Summe (mm)","Vorhersage Regenwahrsch. max (%)"
+                    };
+                    if (rule.metric <= 7) ro["metric_label"] = metricLabels[rule.metric];
+                }
                 ro["comparison"] = rule.comparison;
+                {
+                    static const char* compLabels[] = {">",">=","<","<="};
+                    if (rule.comparison <= 3) ro["comparison_label"] = compLabels[rule.comparison];
+                }
                 ro["threshold"] = rule.threshold;
                 ro["effectPercent"] = rule.effectPercent;
                 ro["windowHours"] = rule.windowHours;
