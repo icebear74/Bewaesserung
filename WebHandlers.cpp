@@ -156,6 +156,9 @@ static void handleBackupPage();
 static void handleApiBackup();
 static void handleRestoreBegin();
 static void handleRestoreUploadChunk();
+static void handleApiDecisionLog();
+static void handleApiDecisionLogClear();
+static void handleApiWateringSimulateTimeline();
 
 // ─── Register ─────────────────────────────────────────────────────────────────
 
@@ -189,6 +192,11 @@ void registerHandlers(WebServerManager* wsm, Application* app) {
     g_server->on("/backup",          HTTP_GET,  handleBackupPage);
     g_server->on("/api/backup",      HTTP_GET,  handleApiBackup);
     g_server->on("/api/restore",     HTTP_POST, handleRestoreBegin, handleRestoreUploadChunk);
+    // Decision log
+    g_server->on("/api/decisionlog",       HTTP_GET,  handleApiDecisionLog);
+    g_server->on("/api/decisionlog/clear", HTTP_POST, handleApiDecisionLogClear);
+    // 48h simulation timeline
+    g_server->on("/api/watering_simulate_timeline", HTTP_POST, handleApiWateringSimulateTimeline);
     // File manager (/fs and sub-routes)
     setupFileManagerRoutes(g_server);
     g_server->onNotFound(handleNotFound);
@@ -433,6 +441,30 @@ static void handleStatus() {
             weatherHtml += "<tr><td>Letzte URL</td><td><code style='word-break:break-all'>" + String(wm->getLastRequestUrl()) + "</code></td></tr>";
         }
         weatherHtml += "</table></div>";
+        weatherHtml += "</div>";
+        // 24h+ hourly forecast table
+        if (w.hourlyCount > 0) {
+            weatherHtml += "<div style='margin-top:12px'><b>&#128197; Stundenvorhersage:</b>";
+            weatherHtml += "<div class='table-wrap' style='margin-top:4px'><table class='compact-table'>"
+                           "<tr><th>Uhrzeit</th><th>Temp (&deg;C)</th><th>Regen (mm)</th><th>Wahrscheinlichkeit</th></tr>";
+            time_t nowTs = time(nullptr);
+            for (int hi = 0; hi < w.hourlyCount; hi++) {
+                if (w.hourlyTime[hi] <= 0) continue;
+                if (w.hourlyTime[hi] < nowTs - 3600) continue;
+                struct tm ht;
+                localtime_r(&w.hourlyTime[hi], &ht);
+                char htBuf[16];
+                snprintf(htBuf, sizeof(htBuf), "%02d:%02d", ht.tm_hour, ht.tm_min);
+                bool isPast = w.hourlyTime[hi] < nowTs;
+                char rowBuf[256];
+                snprintf(rowBuf, sizeof(rowBuf),
+                         "<tr%s><td>%s</td><td>%.1f</td><td>%.1f</td><td>%.0f%%</td></tr>",
+                         isPast ? " style='color:#999;font-style:italic'" : "",
+                         htBuf, w.hourlyTemp[hi], w.hourlyPrecipMm[hi], w.hourlyPrecipPct[hi]);
+                weatherHtml += rowBuf;
+            }
+            weatherHtml += "</table></div></div>";
+        }
         weatherHtml += "</div></div>";  // flex + outer div
     } else if (wm) {
         weatherHtml += "<div style='margin-top:16px;border-top:1px solid #eee;padding-top:12px'>";
@@ -1227,7 +1259,11 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     }
     r += "<div class=\"form-row\">";
     r += "<div class=\"form-col\"><label title=\"Sperrt nur diesen Slot temporär. Andere Slots laufen normal.\"><input type=\"checkbox\" name=\"s"; r += si; r += "_lockEnabled\"";
-    if (slot.lockEnabled) r += " checked";
+    {
+        time_t lockNow = time(nullptr);
+        bool lockStillActive = slot.lockEnabled && slot.lockUntil > 0 && lockNow > 0 && lockNow < slot.lockUntil;
+        if (lockStillActive) r += " checked";
+    }
     r += "> Slot temporär sperren</label></div>";
     r += "<div class=\"form-col\"><label title=\"Dauer ab jetzt in Stunden für diese Slot-Sperre.\">Sperrdauer (h)</label><input type=\"number\" name=\"s";
     r += si; r += "_lockHours\" value=\""; r += slotLockHours; r += "\" min=\"1\" max=\"168\"></div>";
@@ -1320,9 +1356,14 @@ static String buildWeatherRuleSummary(const WeatherRule& rule) {
                           rule.metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX)
                              ? "%"
                              : " mm");
-    String tail = weatherMetricUsesWindow(rule.metric)
-                      ? (" in den nächsten " + String(rule.windowHours) + "h")
-                      : "";
+    String tail;
+    if (weatherMetricUsesWindow(rule.metric)) {
+        if (rule.windowHours < 0) {
+            tail = " in den letzten " + String(-rule.windowHours) + "h";
+        } else {
+            tail = " in den nächsten " + String(rule.windowHours) + "h";
+        }
+    }
     if (rule.actionType == WEATHER_RULE_SKIP) {
         return metric + tail + " " + op + " " + threshold + unit + " → Aussetzen";
     }
@@ -1444,13 +1485,13 @@ static String buildWeatherRuleRowHtml(int wi, int ri, const WeatherRule& rule) {
     html += ri;
     html += "WindowRow\" class=\"form-row\" style=\"display:";
     html += (showWindow ? "flex" : "none");
-    html += "\"><div class=\"form-col\"><label title=\"Nur f\u00fcr Zeitfenster-Regeln: wie viele n\u00e4chste Stunden ausgewertet werden.\">Zeitfenster (h)</label><input type=\"number\" name=\"wt";
+    html += "\"><div class=\"form-col\"><label title=\"Positiver Wert: n\u00e4chste X Stunden (Vorhersage). Negativer Wert: letzte X Stunden (Verlauf). G\u00fcltig: -72 bis +120.\">Zeitfenster (h, negativ = Vergangenheit)</label><input type=\"number\" name=\"wt";
     html += wi;
     html += "_r";
     html += ri;
     html += "_windowHours\" value=\"";
     html += rule.windowHours;
-    html += "\" min=\"1\" max=\"48\" oninput=\"onRuleChanged(";
+    html += "\" min=\"-72\" max=\"120\" oninput=\"onRuleChanged(";
     html += wi;
     html += ",";
     html += ri;
@@ -1504,6 +1545,19 @@ static String buildWeatherTemplateRowHtml(int wi, const WeatherTemplate& wt) {
     html += wi;
     html += ",this)\" required></div></div>";
     html += "<div class=\"hint-text\" style=\"margin-bottom:8px\">Ein Template kann mehrere Regeln enthalten. Reihenfolge im System: erst <b>Aussetzen</b>, danach <b>Verkürzen/Verlängern</b>. Zuschl&#228;ge und Abz&#252;ge beziehen sich immer auf die Basislaufzeit der Zuweisung.</div>";
+    // Rain-Smooth option
+    html += "<div class=\"form-row\">";
+    html += "<div class=\"form-col\"><label title=\"Passt die Laufzeit prozentual basierend auf der aktuellen Regenwahrscheinlichkeit an.\"><input type=\"checkbox\" name=\"wt";
+    html += wi;
+    html += "_rainSmooth\"";
+    if (wt.rainSmoothEnabled) html += " checked";
+    html += "> Rain-Smooth (reduziert Laufzeit proportional zur Regenwahrscheinlichkeit)</label></div>";
+    html += "<div class=\"form-col\"><label title=\"Maximale Reduktion wenn Regenwahrscheinlichkeit 100%.\">Max. Rain-Smooth Reduktion (%)</label>";
+    html += "<input type=\"number\" name=\"wt";
+    html += wi;
+    html += "_rainSmoothMaxPct\" value=\"";
+    html += wt.rainSmoothMaxPct;
+    html += "\" min=\"5\" max=\"90\"></div></div>";
     html += "<input type=\"hidden\" name=\"wt";
     html += wi;
     html += "_ruleCount\" id=\"wt";
@@ -1765,6 +1819,10 @@ static void handleSaveWatering() {
     HardwareConfig& hw  = cfg->getHardwareConfig();
     SlotConfig&     sc  = cfg->getSlotConfig();
 
+    // Expire any stale locks before computing the new config, so that matching
+    // "still active" below uses fresh (already-expired) state.
+    cfg->expireLocks(time(nullptr));
+
     int slotCount = constrain(
         g_server->hasArg("slotCount") ? g_server->arg("slotCount").toInt() : 0,
         0, MAX_SLOTS);
@@ -1773,17 +1831,23 @@ static void handleSaveWatering() {
     newSc.slotCount  = 0;
     newSc.assignCount = 0;
     newSc.automationLockEnabled = g_server->hasArg("automationLockEnabled");
-    newSc.automationLockUntil = 0;
+    newSc.automationLockUntil   = 0;
     if (newSc.automationLockEnabled) {
-        int lockHours = g_server->hasArg("automationLockHours")
-                            ? constrain(g_server->arg("automationLockHours").toInt(), 0, 168)
-                            : 24;
-        if (lockHours <= 0) lockHours = 24;
         time_t nowLocal = time(nullptr);
-        if (nowLocal > 0) {
-            newSc.automationLockUntil = nowLocal + ((time_t)lockHours * 3600);
+        // Preserve an existing active automation lock to avoid re-locking on every save.
+        if (sc.automationLockEnabled && sc.automationLockUntil > 0
+                && nowLocal > 0 && nowLocal < sc.automationLockUntil) {
+            newSc.automationLockUntil = sc.automationLockUntil;
         } else {
-            newSc.automationLockEnabled = false;
+            int lockHours = g_server->hasArg("automationLockHours")
+                                ? constrain(g_server->arg("automationLockHours").toInt(), 0, 168)
+                                : 24;
+            if (lockHours <= 0) lockHours = 24;
+            if (nowLocal > 0) {
+                newSc.automationLockUntil = nowLocal + ((time_t)lockHours * 3600);
+            } else {
+                newSc.automationLockEnabled = false;
+            }
         }
     }
     int slotRemap[MAX_SLOTS];
@@ -1866,15 +1930,33 @@ static void handleSaveWatering() {
         }
         snprintf(key, sizeof(key), "s%d_lockEnabled", si);
         s.lockEnabled = g_server->hasArg(key);
-        s.lockUntil = 0;
+        s.lockUntil   = 0;
         if (s.lockEnabled) {
-            snprintf(key, sizeof(key), "s%d_lockHours", si);
-            int lockHours = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 1, 168) : 24;
             time_t nowLocal = time(nullptr);
-            if (nowLocal > 0) {
-                s.lockUntil = nowLocal + ((time_t)lockHours * 3600);
+            // Preserve an existing active per-slot lock to avoid re-locking on every save.
+            time_t existingLockUntil = 0;
+            for (int osi = 0; osi < sc.slotCount; osi++) {
+                if (strcmp(sc.slots[osi].name, s.name) == 0
+                        && sc.slots[osi].lockEnabled
+                        && sc.slots[osi].lockUntil > 0
+                        && nowLocal > 0
+                        && nowLocal < sc.slots[osi].lockUntil) {
+                    existingLockUntil = sc.slots[osi].lockUntil;
+                    break;
+                }
+            }
+            if (existingLockUntil > 0) {
+                // Lock still active – preserve the original expiry.
+                s.lockUntil = existingLockUntil;
             } else {
-                s.lockEnabled = false;
+                // No active lock – apply a fresh lock for the requested duration.
+                snprintf(key, sizeof(key), "s%d_lockHours", si);
+                int lockHours = g_server->hasArg(key) ? constrain(g_server->arg(key).toInt(), 1, 168) : 24;
+                if (nowLocal > 0) {
+                    s.lockUntil = nowLocal + ((time_t)lockHours * 3600);
+                } else {
+                    s.lockEnabled = false;
+                }
             }
         }
         newSc.slotCount++;
@@ -1897,6 +1979,14 @@ static void handleSaveWatering() {
         WeatherTemplate& wt = newSc.weatherTemplates[mappedTemplateIndex];
         wt = WeatherTemplate{};
         strlcpy(wt.name, g_server->arg(key).c_str(), sizeof(wt.name));
+
+        // Rain-Smooth settings
+        snprintf(key, sizeof(key), "wt%d_rainSmooth", wi);
+        wt.rainSmoothEnabled = g_server->hasArg(key);
+        snprintf(key, sizeof(key), "wt%d_rainSmoothMaxPct", wi);
+        wt.rainSmoothMaxPct = g_server->hasArg(key)
+            ? (uint8_t)constrain(g_server->arg(key).toInt(), 5, 90)
+            : 50;
 
         snprintf(key, sizeof(key), "wt%d_ruleCount", wi);
         int ruleCount = constrain(g_server->hasArg(key) ? g_server->arg(key).toInt() : 0,
@@ -1922,7 +2012,7 @@ static void handleSaveWatering() {
             snprintf(rkey, sizeof(rkey), "wt%d_r%d_threshold", wi, ri);
             rule.threshold = g_server->hasArg(rkey) ? g_server->arg(rkey).toFloat() : 0.0f;
             snprintf(rkey, sizeof(rkey), "wt%d_r%d_windowHours", wi, ri);
-            rule.windowHours = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : 24, 1, 48);
+            rule.windowHours = (int16_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : 24, -72, 120);
             snprintf(rkey, sizeof(rkey), "wt%d_r%d_effectPct", wi, ri);
             rule.effectPercent = (uint8_t)constrain(g_server->hasArg(rkey) ? g_server->arg(rkey).toInt() : 25, 1, 200);
         }
@@ -2512,10 +2602,18 @@ static void handleBackupPage() {
 // ─── Backup download – GET /api/backup ───────────────────────────────────────
 
 static void handleApiBackup() {
+    bool safeMode = g_server->hasArg("safe") && g_server->arg("safe") == "1";
     WhPsramAllocator alloc;
     JsonDocument doc(&alloc);
-    doc["version"] = 1;
-    doc["ts"]      = (long long)time(nullptr);
+    doc["version"]     = 1;
+    doc["ts"]          = (long long)time(nullptr);
+    doc["backup_type"] = safeMode ? "safe" : "full";
+    if (safeMode) {
+        JsonArray redacted = doc["redacted_fields"].to<JsonArray>();
+        redacted.add("config.ssid");
+        redacted.add("config.password");
+        redacted.add("config.otaPassword");
+    }
 
     // Embed each config file as a nested JSON object
     const struct { const char* key; const char* path; } configFiles[] = {
@@ -2529,6 +2627,12 @@ static void handleApiBackup() {
         if (!fh) continue;
         JsonDocument tmp(&alloc);
         if (!deserializeJson(tmp, fh)) {
+            if (safeMode && strcmp(configFiles[i].key, "config") == 0) {
+                // Redact sensitive fields for safe backup
+                tmp.remove("ssid");
+                tmp.remove("password");
+                tmp.remove("otaPassword");
+            }
             doc[configFiles[i].key] = tmp.as<JsonVariant>();
         }
         fh.close();
@@ -2536,8 +2640,9 @@ static void handleApiBackup() {
 
     String json;
     serializeJson(doc, json);
+    String filename = safeMode ? "bewaesserung_backup_safe.json" : "bewaesserung_backup.json";
     g_server->sendHeader("Content-Disposition",
-                         "attachment; filename=\"bewaesserung_backup.json\"");
+                         "attachment; filename=\"" + filename + "\"");
     g_server->send(200, "application/json", json);
 }
 
@@ -2621,6 +2726,37 @@ static void handleRestoreBegin() {
         restored++;
     }
 
+    // If this is a safe backup, re-apply existing credentials so they aren't lost.
+    bool isSafeBackup = doc["backup_type"].is<const char*>() &&
+                        strcmp(doc["backup_type"] | "", "safe") == 0;
+    if (isSafeBackup && LittleFS.exists("/config.json")) {
+        ConfigManager* cfgMgr = g_app ? g_app->getConfigManager() : nullptr;
+        if (cfgMgr) {
+            File fc = LittleFS.open("/config.json", "r");
+            if (fc) {
+                WhPsramAllocator alloc2;
+                JsonDocument restoredCfg(&alloc2);
+                DeserializationError err2 = deserializeJson(restoredCfg, fc);
+                fc.close();
+                if (!err2) {
+                    DeviceConfig& existing = cfgMgr->getDeviceConfig();
+                    if (!(restoredCfg["ssid"].is<const char*>()) || strlen(restoredCfg["ssid"] | "") == 0)
+                        restoredCfg["ssid"] = existing.ssid;
+                    if (!(restoredCfg["password"].is<const char*>()) || strlen(restoredCfg["password"] | "") == 0)
+                        restoredCfg["password"] = existing.password;
+                    if (!(restoredCfg["otaPassword"].is<const char*>()) || strlen(restoredCfg["otaPassword"] | "") == 0)
+                        restoredCfg["otaPassword"] = existing.otaPassword;
+                    File fw2 = LittleFS.open("/config.json", "w");
+                    if (fw2) {
+                        serializeJson(restoredCfg, fw2);
+                        fw2.close();
+                        Serial.println("[Restore] Credentials preserved from existing config.");
+                    }
+                }
+            }
+        }
+    }
+
     String page = buildPage(HTML_BACKUP_PAGE);
     String msg = "<div class='alert-info'>&#10003; ";
     msg += restored;
@@ -2638,4 +2774,124 @@ static void handleNotFound() {
     }
     String page = buildPage(HTML_404_PAGE);
     g_server->send(404, "text/html; charset=UTF-8", page);
+}
+
+// ─── Decision log API ────────────────────────────────────────────────────────
+
+static void handleApiDecisionLog() {
+    WateringRunLog* rl = g_app->getRunLog();
+    String json;
+    if (rl) rl->getDecisionLogJson(json);
+    else    json = "[]";
+    g_server->send(200, "application/json", json);
+}
+
+static void handleApiDecisionLogClear() {
+    WateringRunLog* rl = g_app->getRunLog();
+    if (rl) rl->clearDecisionLog();
+    g_server->send(200, "application/json", "{\"success\":true}");
+}
+
+// ─── 48h simulation timeline ─────────────────────────────────────────────────
+
+static void handleApiWateringSimulateTimeline() {
+    if (g_server->method() != HTTP_POST) {
+        g_server->send(405, "text/plain", "Method Not Allowed");
+        return;
+    }
+
+    ConfigManager*  cfg = g_app->getConfigManager();
+    SlotConfig&     sc  = cfg->getSlotConfig();
+    HardwareConfig& hw  = cfg->getHardwareConfig();
+
+    int horizonHours = g_server->hasArg("horizonHours")
+                           ? constrain(g_server->arg("horizonHours").toInt(), 1, 48)
+                           : 24;
+    int stepMinutes  = g_server->hasArg("stepMinutes")
+                           ? constrain(g_server->arg("stepMinutes").toInt(), 15, 240)
+                           : 60;
+
+    WeatherManager* wm = g_app->getWeatherManager();
+    const WeatherData* weatherData = (wm && wm->isAvailable()) ? &wm->getData() : nullptr;
+    bool weatherAvailable = (wm && wm->isAvailable());
+    bool weatherStale     = (wm && wm->isStale());
+
+    time_t now = time(nullptr);
+    if (now < 1000000L) {
+        g_server->send(503, "application/json", "{\"error\":\"Systemzeit nicht gesetzt.\"}");
+        return;
+    }
+
+    // Allocate decision result in PSRAM to avoid stack overflow
+    WateringDecisionResult* result = static_cast<WateringDecisionResult*>(
+        heap_caps_calloc(1, sizeof(WateringDecisionResult), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!result) result = static_cast<WateringDecisionResult*>(calloc(1, sizeof(WateringDecisionResult)));
+    if (!result) {
+        g_server->send(500, "application/json", "{\"error\":\"OOM\"}");
+        return;
+    }
+
+    WhPsramAllocator alloc;
+    JsonDocument doc(&alloc);
+    doc["horizonHours"]     = horizonHours;
+    doc["stepMinutes"]      = stepMinutes;
+    doc["generatedAt"]      = formatDateTimeLocal(now);
+    doc["weatherAvailable"] = weatherAvailable;
+    doc["weatherStale"]     = weatherStale;
+
+    JsonArray steps = doc["steps"].to<JsonArray>();
+    time_t endTime = now + (time_t)horizonHours * 3600;
+
+    for (time_t simTime = now; simTime <= endTime; simTime += (time_t)stepMinutes * 60) {
+        JsonObject step = steps.add<JsonObject>();
+        step["time"]  = formatDateTimeLocal(simTime);
+        step["epoch"] = (long)simTime;
+
+        JsonArray slotResults = step["slots"].to<JsonArray>();
+        for (int si = 0; si < sc.slotCount; si++) {
+            WateringDecisionInput in;
+            in.slotConfig           = &sc;
+            in.hardwareConfig       = &hw;
+            in.weatherData          = weatherData;
+            in.weatherAvailable     = weatherAvailable;
+            in.weatherStale         = weatherStale;
+            in.nowLocal             = simTime;
+            in.slotIndex            = si;
+            in.enforceDayMatch      = true;
+            in.enforceTriggerMinute = true;
+
+            WateringDecisionEngine::evaluateSlot(in, *result);
+
+            if (!result->validInput || !result->triggerMatched) continue;
+
+            JsonObject sr = slotResults.add<JsonObject>();
+            sr["slotIndex"]        = si;
+            sr["slotName"]         = getSlotLabel(sc.slots[si], si);
+            sr["action"]           = actionToText(result->action);
+            sr["reason"]           = result->reason;
+            sr["totalDurationSec"] = result->totalDurationSec;
+            sr["triggerSource"]    = result->triggerSource;
+            sr["warnings"]         = result->warnings;
+
+            JsonArray plan = sr["plan"].to<JsonArray>();
+            for (int pi = 0; pi < result->planCount; pi++) {
+                JsonObject p = plan.add<JsonObject>();
+                p["pumpIndex"]          = result->plan[pi].pumpIndex;
+                p["pumpName"]           = getPumpLabel(hw, result->plan[pi].pumpIndex);
+                p["action"]             = actionToText(result->plan[pi].action);
+                p["plannedDurationSec"] = result->plan[pi].plannedDurationSec;
+                p["leadTimeSec"]        = result->plan[pi].leadTimeSec;
+                p["durationSec"]        = result->plan[pi].durationSec;
+                p["adjustmentPercent"]  = result->plan[pi].adjustmentPercent;
+                p["reason"]             = result->plan[pi].reason;
+                p["appliedRules"]       = result->plan[pi].appliedRules;
+            }
+        }
+    }
+
+    free(result);
+
+    String json;
+    serializeJson(doc, json);
+    g_server->send(200, "application/json", json);
 }

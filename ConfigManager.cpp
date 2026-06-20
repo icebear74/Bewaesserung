@@ -439,6 +439,8 @@ bool ConfigManager::loadSlotConfig() {
                 wt = WeatherTemplate{};
                 JsonObject wto = wtArr[i].as<JsonObject>();
                 strlcpy(wt.name, wto["name"] | "", sizeof(wt.name));
+                wt.rainSmoothEnabled = wto["rainSmoothEnabled"] | false;
+                wt.rainSmoothMaxPct = (uint8_t)constrain((int)(wto["rainSmoothMaxPct"] | 50), 5, 90);
                 clearWeatherTemplateRules(wt);
                 if (wto["rules"].is<JsonArray>()) {
                     JsonArray rules = wto["rules"].as<JsonArray>();
@@ -455,7 +457,7 @@ bool ConfigManager::loadSlotConfig() {
                                                              WEATHER_OP_GT, WEATHER_OP_LTE);
                         rule.threshold = ro["threshold"] | 0.0f;
                         rule.effectPercent = (uint8_t)constrain((int)(ro["effectPercent"] | 25), 1, 200);
-                        rule.windowHours = (uint8_t)constrain((int)(ro["windowHours"] | 24), 1, 48);
+                        rule.windowHours = (int16_t)constrain((int)(ro["windowHours"] | 24), -72, 120);
                     }
                 } else {
                     if (wto["rules"] && !wto["rules"].is<JsonArray>()) {
@@ -591,6 +593,12 @@ bool ConfigManager::saveSlotConfig() {
         so["name"]           = s.name;
         so["enabled"]        = s.enabled;
         so["triggerType"]    = s.triggerType;
+        // Human-readable labels (informational, not parsed on load)
+        {
+            static const char* triggerLabels[] = {"Feste Uhrzeit","Sonnenaufgang","Sonnenuntergang","Mittagszeit","Offset"};
+            if (s.triggerType <= 4) so["triggerType_label"] = triggerLabels[s.triggerType];
+        }
+        so["repeatMode_label"] = (s.repeatMode == REPEAT_INTERVAL_DAYS) ? "Intervall (alle N Tage)" : "Wochentage";
         so["fixedHour"]      = s.fixedHour;
         so["fixedMinute"]    = s.fixedMinute;
         so["offsetMinutes"]  = s.offsetMinutes;
@@ -612,6 +620,8 @@ bool ConfigManager::saveSlotConfig() {
             const WeatherTemplate& wt = _slotConfig.weatherTemplates[i];
             JsonObject wto = wtArr.add<JsonObject>();
             wto["name"] = wt.name;
+            wto["rainSmoothEnabled"] = wt.rainSmoothEnabled;
+            wto["rainSmoothMaxPct"]  = wt.rainSmoothMaxPct;
             JsonArray rules = wto["rules"].to<JsonArray>();
             for (int ri = 0; ri < wt.ruleCount; ri++) {
                 const WeatherRule& rule = wt.rules[ri];
@@ -659,6 +669,29 @@ bool ConfigManager::isAutomationLocked(time_t nowLocal) const {
     if (nowLocal <= 0) nowLocal = time(nullptr);
     if (nowLocal <= 0) return false;
     return nowLocal < _slotConfig.automationLockUntil;
+}
+
+bool ConfigManager::expireLocks(time_t nowLocal) {
+    if (nowLocal <= 0) nowLocal = time(nullptr);
+    if (nowLocal <= 0) return false;
+    bool changed = false;
+    if (_slotConfig.automationLockEnabled && _slotConfig.automationLockUntil > 0
+            && nowLocal >= _slotConfig.automationLockUntil) {
+        _slotConfig.automationLockEnabled = false;
+        _slotConfig.automationLockUntil   = 0;
+        changed = true;
+        Serial.println("[Config] Automatiksperre abgelaufen – automatisch zurückgesetzt.");
+    }
+    for (int i = 0; i < _slotConfig.slotCount; i++) {
+        WateringSlot& s = _slotConfig.slots[i];
+        if (s.lockEnabled && s.lockUntil > 0 && nowLocal >= s.lockUntil) {
+            s.lockEnabled = false;
+            s.lockUntil   = 0;
+            changed = true;
+            Serial.printf("[Config] Slot '%s' Sperre abgelaufen – automatisch zurückgesetzt.\n", s.name);
+        }
+    }
+    return changed;
 }
 
 bool ConfigManager::resetAll() {

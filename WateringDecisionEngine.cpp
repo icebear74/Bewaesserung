@@ -162,7 +162,7 @@ static bool metricUsesWindow(uint8_t metric) {
            metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX;
 }
 
-static void formatMetricName(uint8_t metric, uint8_t windowHours, char* dst, size_t dstSize) {
+static void formatMetricName(uint8_t metric, int16_t windowHours, char* dst, size_t dstSize) {
     // Keep wording aligned with the UI labels in WebHandlers.cpp / WebPages.h so
     // simulation, status and configuration describe the same rule semantics.
     switch (metric) {
@@ -170,7 +170,11 @@ static void formatMetricName(uint8_t metric, uint8_t windowHours, char* dst, siz
             snprintf(dst, dstSize, "aktuelle Temperatur");
             break;
         case WEATHER_METRIC_FORECAST_TEMP_MAX:
-            snprintf(dst, dstSize, "max. Temperatur in den nächsten %uh", windowHours);
+            if (windowHours < 0) {
+                snprintf(dst, dstSize, "max. Temperatur in den letzten %dh", (int)(-windowHours));
+            } else {
+                snprintf(dst, dstSize, "max. Temperatur in den nächsten %dh", (int)windowHours);
+            }
             break;
         case WEATHER_METRIC_CURRENT_RAIN_MM:
             snprintf(dst, dstSize, "aktueller Niederschlag");
@@ -185,10 +189,18 @@ static void formatMetricName(uint8_t metric, uint8_t windowHours, char* dst, siz
             snprintf(dst, dstSize, "Regenwahrscheinlichkeit heute");
             break;
         case WEATHER_METRIC_FORECAST_RAIN_SUM:
-            snprintf(dst, dstSize, "Regen in den nächsten %uh", windowHours);
+            if (windowHours < 0) {
+                snprintf(dst, dstSize, "Regen in den letzten %dh", (int)(-windowHours));
+            } else {
+                snprintf(dst, dstSize, "Regen in den nächsten %dh", (int)windowHours);
+            }
             break;
         case WEATHER_METRIC_FORECAST_RAIN_PROB_MAX:
-            snprintf(dst, dstSize, "max. Regenwahrscheinlichkeit in den nächsten %uh", windowHours);
+            if (windowHours < 0) {
+                snprintf(dst, dstSize, "max. Regenwahrscheinlichkeit in den letzten %dh", (int)(-windowHours));
+            } else {
+                snprintf(dst, dstSize, "max. Regenwahrscheinlichkeit in den nächsten %dh", (int)windowHours);
+            }
             break;
         default:
             snprintf(dst, dstSize, "Wetterwert");
@@ -240,18 +252,27 @@ static bool compareMetric(float actual, uint8_t comparison, float threshold) {
     }
 }
 
-static bool forecastWindowHasSamples(const WeatherData& w, time_t nowLocal, uint8_t windowHours,
+static bool forecastWindowHasSamples(const WeatherData& w, time_t nowLocal, int16_t windowHours,
                                      int* firstIndex, int* lastIndex) {
     if (firstIndex) *firstIndex = -1;
     if (lastIndex) *lastIndex = -1;
     if (w.hourlyCount == 0 || nowLocal <= INVALID_TIME) return false;
 
-    time_t windowSeconds = (time_t)max((int)windowHours, 1) * 3600;
-    time_t endTs = nowLocal + windowSeconds;
+    time_t windowStart, windowEnd;
+    if (windowHours >= 0) {
+        // Future window: from now to now + windowHours
+        windowStart = nowLocal;
+        windowEnd   = nowLocal + (time_t)max((int)windowHours, 1) * 3600;
+    } else {
+        // Past window: from now + windowHours (negative) to now
+        windowStart = nowLocal + (time_t)windowHours * 3600;  // windowHours is negative
+        windowEnd   = nowLocal;
+    }
+
     bool found = false;
     for (int i = 0; i < w.hourlyCount; i++) {
         time_t ts = w.hourlyTime[i];
-        if (ts <= 0 || ts < nowLocal || ts > endTs) continue;
+        if (ts <= 0 || ts < windowStart || ts > windowEnd) continue;
         if (firstIndex && *firstIndex < 0) *firstIndex = i;
         if (lastIndex) *lastIndex = i;
         found = true;
@@ -324,7 +345,7 @@ static void fillRuleSummary(const WeatherRule& rule, float actualValue, char* ds
     char metricName[96];
     char actualBuf[24];
     char thresholdBuf[24];
-    formatMetricName(rule.metric, metricUsesWindow(rule.metric) ? rule.windowHours : 24, metricName, sizeof(metricName));
+    formatMetricName(rule.metric, metricUsesWindow(rule.metric) ? rule.windowHours : (int16_t)24, metricName, sizeof(metricName));
     formatMetricValue(rule.metric, actualValue, actualBuf, sizeof(actualBuf));
     formatMetricValue(rule.metric, rule.threshold, thresholdBuf, sizeof(thresholdBuf));
 
@@ -615,6 +636,36 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
                     p.action = WATER_ACTION_EXECUTE;
                     setText(p.reason, sizeof(p.reason),
                             "Wetterregeln getroffen, Ergebnis bleibt bei der Basislaufzeit.");
+                }
+            }
+        }
+
+        // Rain-Smooth: optional adaptive runtime reduction based on precipitation probability
+        if (p.action != WATER_ACTION_SKIP && input.weatherAvailable && input.weatherData &&
+                effectiveTemplate.rainSmoothEnabled && effectiveTemplate.rainSmoothMaxPct > 0) {
+            float precipProb = input.weatherData->precipProb;
+            if (precipProb > 0.0f) {
+                int smoothReduction = (int)(precipProb * effectiveTemplate.rainSmoothMaxPct / 100.0f);
+                smoothReduction = constrain(smoothReduction, 0, (int)effectiveTemplate.rainSmoothMaxPct);
+                if (smoothReduction > 0) {
+                    int newAdjust = p.adjustmentPercent - smoothReduction;
+                    if (newAdjust < MIN_ADJUSTMENT_PERCENT) newAdjust = MIN_ADJUSTMENT_PERCENT;
+                    p.adjustmentPercent = newAdjust;
+                    long adjusted = (long)p.baseDurationSec * (long)(100 + newAdjust) / 100L;
+                    if (adjusted < 1) adjusted = 1;
+                    p.plannedDurationSec = (int)adjusted;
+                    char smoothBuf[96];
+                    snprintf(smoothBuf, sizeof(smoothBuf),
+                             "RainSmooth -%d%% (Niederschlagswahrsch. %.0f%%, max. Reduktion %u%%)",
+                             smoothReduction, precipProb, effectiveTemplate.rainSmoothMaxPct);
+                    appendText(p.appliedRules, sizeof(p.appliedRules), smoothBuf);
+                    if (p.plannedDurationSec < p.baseDurationSec && p.action != WATER_ACTION_REDUCE) {
+                        p.action = WATER_ACTION_REDUCE;
+                        reducedCount++;
+                        snprintf(p.reason, sizeof(p.reason),
+                                 "Laufzeit um %d%% reduziert (%ds statt %ds).",
+                                 -newAdjust, p.plannedDurationSec, p.baseDurationSec);
+                    }
                 }
             }
         }

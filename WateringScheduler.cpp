@@ -110,6 +110,11 @@ void WateringScheduler::update() {
     if (nowMinute == _lastCheckedMinute) return;
     _lastCheckedMinute = nowMinute;
 
+    // Auto-expire stale locks and persist if any changed
+    if (_cfg->expireLocks(now)) {
+        _cfg->saveSlotConfig();
+    }
+
     SlotConfig& sc = _cfg->getSlotConfig();
     HardwareConfig& hw = _cfg->getHardwareConfig();
     // Preflight weather refresh: if a slot triggers in ~1 minute, request update
@@ -164,10 +169,24 @@ void WateringScheduler::update() {
             if (_decisionBuf->triggerMatched) {
                 Serial.printf("[Sched] Slot '%s' skipped: %s\n",
                               sc.slots[si].name, _decisionBuf->reason);
+                // Log skip to decision history
+                if (_runLog) {
+                    _runLog->appendDecision(now, sc.slots[si].name, "skip",
+                                            _decisionBuf->reason, 0);
+                }
             }
             continue;
         }
         enqueueDecision(*_decisionBuf);
+        // Log the decision to history
+        if (_runLog) {
+            const char* actionStr = "execute";
+            if (_decisionBuf->action == WATER_ACTION_REDUCE) actionStr = "reduce";
+            else if (_decisionBuf->action == WATER_ACTION_EXTEND) actionStr = "extend";
+            else if (_decisionBuf->action == WATER_ACTION_FALLBACK) actionStr = "fallback";
+            _runLog->appendDecision(now, sc.slots[si].name, actionStr,
+                                    _decisionBuf->reason, _decisionBuf->totalDurationSec);
+        }
     }
 }
 
