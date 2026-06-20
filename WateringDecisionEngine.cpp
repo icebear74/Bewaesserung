@@ -133,6 +133,10 @@ static void fillTriggerSource(char* dst, size_t dstSize,
                  slot.fixedHour, slot.fixedMinute);
         return;
     }
+    if (slot.triggerType == TRIGGER_MANUAL) {
+        strlcpy(dst, "Manuell ausgelöst", dstSize);
+        return;
+    }
     if (slot.triggerType == TRIGGER_SUNSET) {
         snprintf(dst, dstSize, usedFallbackTime
                                   ? "Sonnenuntergang (Fallback %02u:%02u)"
@@ -159,7 +163,9 @@ static void fillTriggerSource(char* dst, size_t dstSize,
 static bool metricUsesWindow(uint8_t metric) {
     return metric == WEATHER_METRIC_FORECAST_TEMP_MAX ||
            metric == WEATHER_METRIC_FORECAST_RAIN_SUM ||
-           metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX;
+           metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX ||
+           metric == WEATHER_METRIC_DAILY_RAIN_MM ||
+           metric == WEATHER_METRIC_DAILY_RAIN_PROB;
 }
 
 static void formatMetricName(uint8_t metric, int16_t windowHours, char* dst, size_t dstSize) {
@@ -183,10 +189,18 @@ static void formatMetricName(uint8_t metric, int16_t windowHours, char* dst, siz
             snprintf(dst, dstSize, "aktuelle Regenwahrscheinlichkeit");
             break;
         case WEATHER_METRIC_DAILY_RAIN_MM:
-            snprintf(dst, dstSize, "Regen heute");
+            if (windowHours < 0) {
+                snprintf(dst, dstSize, "Regen in den letzten %dh", (int)(-windowHours));
+            } else {
+                snprintf(dst, dstSize, "Regen in den nächsten %dh", (int)windowHours);
+            }
             break;
         case WEATHER_METRIC_DAILY_RAIN_PROB:
-            snprintf(dst, dstSize, "Regenwahrscheinlichkeit heute");
+            if (windowHours < 0) {
+                snprintf(dst, dstSize, "max. Regenwahrscheinlichkeit in den letzten %dh", (int)(-windowHours));
+            } else {
+                snprintf(dst, dstSize, "max. Regenwahrscheinlichkeit in den nächsten %dh", (int)windowHours);
+            }
             break;
         case WEATHER_METRIC_FORECAST_RAIN_SUM:
             if (windowHours < 0) {
@@ -294,10 +308,28 @@ static bool resolveMetricValue(const WeatherRule& rule, const WeatherData& w, ti
             outValue = w.precipProb;
             return true;
         case WEATHER_METRIC_DAILY_RAIN_MM:
-            outValue = w.dailyPrecipMm;
+            if (forecastWindowHasSamples(w, nowLocal, rule.windowHours, &first, &last)) {
+                float sum = 0.0f;
+                for (int i = first; i <= last; i++) {
+                    if (w.hourlyTime[i] <= 0) continue;
+                    sum += w.hourlyPrecipMm[i];
+                }
+                outValue = sum;
+                return true;
+            }
+            outValue = (rule.windowHours >= 24) ? w.dailyPrecipMm : w.precipMm;
             return true;
         case WEATHER_METRIC_DAILY_RAIN_PROB:
-            outValue = w.dailyPrecipPct;
+            if (forecastWindowHasSamples(w, nowLocal, rule.windowHours, &first, &last)) {
+                float vmax = w.hourlyPrecipPct[first];
+                for (int i = first + 1; i <= last; i++) {
+                    if (w.hourlyTime[i] <= 0) continue;
+                    if (w.hourlyPrecipPct[i] > vmax) vmax = w.hourlyPrecipPct[i];
+                }
+                outValue = vmax;
+                return true;
+            }
+            outValue = (rule.windowHours >= 24) ? w.dailyPrecipPct : w.precipProb;
             return true;
         case WEATHER_METRIC_FORECAST_TEMP_MAX:
             if (forecastWindowHasSamples(w, nowLocal, rule.windowHours, &first, &last)) {
@@ -383,6 +415,11 @@ time_t WateringDecisionEngine::computeTriggerTime(const WateringSlot& slot,
         return buildFixed();
     }
 
+    if (slot.triggerType == TRIGGER_MANUAL) {
+        // Manual slots have no automatic trigger time; return 0 so the scheduler skips them.
+        return 0;
+    }
+
     bool haveAstro = weatherAvailable && weatherData &&
                      weatherData->sunrise != 0 && weatherData->sunset != 0;
 
@@ -460,6 +497,13 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         return;
     }
 
+    // Manual slots have no automatic trigger time – mark as matched immediately.
+    if (slot.triggerType == TRIGGER_MANUAL) {
+        out.dayMatched     = true;
+        out.triggerMatched = true;
+        out.triggerTime    = input.nowLocal;
+        fillTriggerSource(out.triggerSource, sizeof(out.triggerSource), slot, false);
+    } else {
     out.triggerTime = computeTriggerTime(slot,
                                          input.nowLocal,
                                          input.weatherData,
@@ -480,6 +524,7 @@ void WateringDecisionEngine::evaluateSlot(const WateringDecisionInput& input, Wa
         setText(out.reason, sizeof(out.reason), "Slot ist zur gewählten Zeit nicht fällig.");
         return;
     }
+    } // end else (non-MANUAL trigger)
 
     if (!input.weatherAvailable || !input.weatherData) {
         setText(out.weatherJustification, sizeof(out.weatherJustification),

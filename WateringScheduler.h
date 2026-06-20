@@ -27,6 +27,10 @@ public:
     // Index of the currently active pump (-1 if none)
     int  getActivePump() const { return _activePump; }
 
+    // Manually trigger a slot (TRIGGER_MANUAL or any slot) respecting its weather rules.
+    // Returns true if at least one pump was queued, false on error or if weather skip.
+    bool triggerManualSlot(int slotIndex);
+
 private:
     struct QueueItem {
         uint8_t pumpIndex   = 0;

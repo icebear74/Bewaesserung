@@ -159,6 +159,7 @@ static void handleRestoreUploadChunk();
 static void handleApiDecisionLog();
 static void handleApiDecisionLogClear();
 static void handleApiWateringSimulateTimeline();
+static void handleApiTriggerSlot();
 
 // ─── Register ─────────────────────────────────────────────────────────────────
 
@@ -197,6 +198,7 @@ void registerHandlers(WebServerManager* wsm, Application* app) {
     g_server->on("/api/decisionlog/clear", HTTP_POST, handleApiDecisionLogClear);
     // 48h simulation timeline
     g_server->on("/api/watering_simulate_timeline", HTTP_POST, handleApiWateringSimulateTimeline);
+    g_server->on("/api/trigger_slot",              HTTP_POST, handleApiTriggerSlot);
     // File manager (/fs and sub-routes)
     setupFileManagerRoutes(g_server);
     g_server->onNotFound(handleNotFound);
@@ -355,6 +357,58 @@ static void handleStatus() {
     } else {
         pumpHtml = "<p style='color:#999;font-style:italic'>Keine Pumpen konfiguriert.</p>";
     }
+
+    // ── Manual slot trigger section ───────────────────────────────────────────
+    {
+        String manualHtml;
+        int manualCount = 0;
+        for (int si = 0; si < sc.slotCount; si++) {
+            if (sc.slots[si].triggerType != TRIGGER_MANUAL) continue;
+            manualCount++;
+        }
+        if (manualCount > 0) {
+            manualHtml += "<h2 style='margin-top:16px;color:#1a6b3c'>&#9654; Manuelle Slots</h2>";
+            manualHtml += "<div style='display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px'>";
+            for (int si = 0; si < sc.slotCount; si++) {
+                const WateringSlot& ms = sc.slots[si];
+                if (ms.triggerType != TRIGGER_MANUAL) continue;
+                String slotLabel = getSlotLabel(ms, si);
+                bool slotLocked = ms.lockEnabled && ms.lockUntil > 0 && now < ms.lockUntil;
+                String btnStyle = slotLocked
+                    ? "background:#aaa;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:14px;cursor:not-allowed"
+                    : "background:#1a6b3c;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:14px;cursor:pointer";
+                manualHtml += "<div style='border:1px solid #b3d4b3;border-radius:8px;padding:10px 14px;background:#f9fff9'>";
+                manualHtml += "<b>" + slotLabel + "</b>";
+                if (!ms.enabled) {
+                    manualHtml += " <span style='color:#b26a00;font-size:12px'>(deaktiviert)</span>";
+                } else if (slotLocked) {
+                    manualHtml += " <span style='color:#b26a00;font-size:12px'>(gesperrt)</span>";
+                }
+                manualHtml += "<br><button style='";
+                manualHtml += btnStyle;
+                manualHtml += "' onclick=\"triggerManualSlot(";
+                manualHtml += si;
+                manualHtml += ",'";
+                manualHtml += slotLabel;
+                manualHtml += "')\"";
+                if (!ms.enabled || slotLocked) manualHtml += " disabled";
+                manualHtml += ">&#9654; Jetzt starten</button></div>";
+            }
+            manualHtml += "</div>";
+            manualHtml += "<script>"
+                "function triggerManualSlot(si,name){"
+                "if(!confirm('Slot \"'+name+'\" jetzt manuell auslösen?'))return;"
+                "fetch('/api/trigger_slot',{method:'POST',"
+                "headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+                "body:'slotIndex='+si})"
+                ".then(function(r){return r.json();})"
+                ".then(function(d){alert(d.msg||(d.ok?'Gestartet':'Fehler'));if(d.ok)location.reload();})"
+                ".catch(function(e){alert('Fehler: '+e);});}"
+                "</script>";
+            pumpHtml += manualHtml;
+        }
+    }
+
     page = replaceToken(page, "{pump_status_html}", pumpHtml);
 
     // ── Weather section ───────────────────────────────────────────────────────
@@ -1153,7 +1207,7 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     (void)hw;
     const char* dayLabels[] = {"Mo","Di","Mi","Do","Fr","Sa","So"};
     const char* trigLabels[] = {"Feste Uhrzeit","Sonnenaufgang","Sonnenuntergang",
-                                 "Mittagszeit","Offset (relativ zu Referenz)"};
+                                 "Mittagszeit","Offset (relativ zu Referenz)","Manuell"};
     const char* baseLabels[] = {"Sonnenaufgang","Sonnenuntergang","Mittagszeit"};
     String r;
     r.reserve(1700);
@@ -1172,12 +1226,19 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "</div>";
     r += "</div>";
     char summaryBuf[220];
-    snprintf(summaryBuf, sizeof(summaryBuf), "Auslöser: %s | Zeit/Fallback: %02u:%02u",
-             trigLabels[slot.triggerType], slot.fixedHour, slot.fixedMinute);
+    if (slot.triggerType == TRIGGER_MANUAL) {
+        snprintf(summaryBuf, sizeof(summaryBuf), "Auslöser: Manuell");
+    } else {
+        snprintf(summaryBuf, sizeof(summaryBuf), "Auslöser: %s | Zeit/Fallback: %02u:%02u",
+                 trigLabels[slot.triggerType < 6 ? slot.triggerType : 0],
+                 slot.fixedHour, slot.fixedMinute);
+    }
     r += "<div style=\"font-size:12px;color:#456;margin-bottom:8px\">";
     r += String(summaryBuf);
-    r += " | ";
-    r += describeRepeatRule(slot);
+    if (slot.triggerType != TRIGGER_MANUAL) {
+        r += " | ";
+        r += describeRepeatRule(slot);
+    }
     time_t nowForLock = time(nullptr);
     if (slot.lockEnabled && slot.lockUntil > 0 && nowForLock > 0 && nowForLock < slot.lockUntil) {
         r += " | <span style='color:#b26a00'>Slot gesperrt bis ";
@@ -1198,15 +1259,17 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<div class=\"form-row\">";
     r += "<div class=\"form-col\"><label title=\"Legt fest, worauf sich der Slot zeitlich bezieht: feste Uhrzeit, Sonnenaufgang, Sonnenuntergang oder Offset relativ dazu.\">Ausl&ouml;ser</label><select name=\"s"; r += si;
     r += "_trigger\" onchange=\"onTriggerChange("; r += si; r += ",this.value)\">";
-    for (int t = 0; t < 5; t++) {
+    for (int t = 0; t < 6; t++) {
         r += "<option value=\""; r += t; r += "\"";
         if (slot.triggerType == (uint8_t)t) r += " selected";
         r += ">"; r += trigLabels[t]; r += "</option>";
     }
     r += "</select></div>";
+    bool isManual = (slot.triggerType == TRIGGER_MANUAL);
     char timeBuf[8];
     snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", slot.fixedHour, slot.fixedMinute);
-    r += "<div class=\"form-col\"><label title=\"Bei astronomischen Triggern wird diese Uhrzeit verwendet, falls keine Wetter-/Astronomiedaten verfügbar sind.\">Uhrzeit / Fallback</label>";
+    r += "<div id=\"timeCol"; r += si; r += "\" class=\"form-col\" style=\"display:"; r += (isManual ? "none" : ""); r += "\">";
+    r += "<label title=\"Bei astronomischen Triggern wird diese Uhrzeit verwendet, falls keine Wetter-/Astronomiedaten verfügbar sind.\">Uhrzeit / Fallback</label>";
     r += "<input type=\"time\" name=\"s"; r += si; r += "_time\" value=\""; r += timeBuf; r += "\"></div>";
     r += "</div>";
     // Offset fields (visible only when trigger=4)
@@ -1224,6 +1287,7 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "<input type=\"number\" name=\"s"; r += si; r += "_offsetMin\" value=\"";
     r += slot.offsetMinutes; r += "\" min=\"-720\" max=\"720\"></div>";
     r += "</div>";
+    r += "<div id=\"schedSection"; r += si; r += "\" style=\"display:"; r += (isManual ? "none" : "block"); r += "\">";
     r += "<div class=\"form-row\">";
     r += "<div class=\"form-col\"><label title=\"Wochentage = feste Tage. Intervall = alle N Tage ab dem Ankerdatum.\">Wiederholung</label><select name=\"s"; r += si;
     r += "_repeatMode\" onchange=\"onRepeatModeChange("; r += si; r += ",this.value)\">";
@@ -1250,6 +1314,7 @@ static String buildSlotRowHtml(int si, const WateringSlot& slot,
     r += "_intervalDays\" value=\""; r += slot.intervalDays; r += "\" min=\"1\" max=\"90\"></div>";
     r += "<div class=\"form-col\"><label title=\"Ab diesem Datum wird das Intervall gezählt.\">Startdatum (Anker)</label><input type=\"date\" name=\"s"; r += si;
     r += "_intervalAnchor\" value=\""; r += epochDayToDateString(slot.intervalAnchorDay); r += "\"></div></div>";
+    r += "</div>"; // end schedSection
     int slotLockHours = 24;
     if (slot.lockEnabled && slot.lockUntil > 0) {
         time_t nowLocal = time(nullptr);
@@ -1324,8 +1389,8 @@ static const char* weatherRuleMetricLabel(uint8_t metric) {
         case WEATHER_METRIC_FORECAST_TEMP_MAX: return "Max. Temperatur in Zeitfenster";
         case WEATHER_METRIC_CURRENT_RAIN_MM: return "Aktueller Niederschlag (mm)";
         case WEATHER_METRIC_CURRENT_RAIN_PROB: return "Aktuelle Regenwahrscheinlichkeit (%)";
-        case WEATHER_METRIC_DAILY_RAIN_MM: return "Regen heute (mm)";
-        case WEATHER_METRIC_DAILY_RAIN_PROB: return "Regenwahrscheinlichkeit heute (%)";
+        case WEATHER_METRIC_DAILY_RAIN_MM: return "Regenmenge im Zeitfenster (mm)";
+        case WEATHER_METRIC_DAILY_RAIN_PROB: return "Max. Regenwahrscheinlichkeit im Zeitfenster (%)";
         case WEATHER_METRIC_FORECAST_RAIN_SUM: return "Regenmenge im Zeitfenster (mm)";
         case WEATHER_METRIC_FORECAST_RAIN_PROB_MAX: return "Max. Regenwahrscheinlichkeit im Zeitfenster (%)";
         default: return "Wetterwert";
@@ -1335,7 +1400,9 @@ static const char* weatherRuleMetricLabel(uint8_t metric) {
 static bool weatherMetricUsesWindow(uint8_t metric) {
     return metric == WEATHER_METRIC_FORECAST_TEMP_MAX ||
            metric == WEATHER_METRIC_FORECAST_RAIN_SUM ||
-           metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX;
+           metric == WEATHER_METRIC_FORECAST_RAIN_PROB_MAX ||
+           metric == WEATHER_METRIC_DAILY_RAIN_MM ||
+           metric == WEATHER_METRIC_DAILY_RAIN_PROB;
 }
 
 static String buildWeatherRuleSummary(const WeatherRule& rule) {
@@ -1871,7 +1938,7 @@ static void handleSaveWatering() {
 
         snprintf(key, sizeof(key), "s%d_trigger", si);
         s.triggerType = (uint8_t)constrain(
-            g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 4);
+            g_server->hasArg(key) ? g_server->arg(key).toInt() : 0, 0, 5);
 
         snprintf(key, sizeof(key), "s%d_time", si);
         if (g_server->hasArg(key)) {
@@ -2173,6 +2240,8 @@ static bool findNextSlotDecision(int slotIndex,
     out.result.slotIndex = -1;  // restore only non-zero default inside WateringDecisionResult
     if (slotIndex < 0 || slotIndex >= sc.slotCount) return false;
     if (nowLocal < 1000000L) return false;
+    // Manual slots have no automatic trigger time
+    if (sc.slots[slotIndex].triggerType == TRIGGER_MANUAL) return false;
 
     struct tm nowTm;
     localtime_r(&nowLocal, &nowTm);
@@ -2894,4 +2963,49 @@ static void handleApiWateringSimulateTimeline() {
     String json;
     serializeJson(doc, json);
     g_server->send(200, "application/json", json);
+}
+
+// ─── Manual slot trigger – POST /api/trigger_slot ────────────────────────────
+
+static void handleApiTriggerSlot() {
+    if (g_server->method() != HTTP_POST) {
+        g_server->send(405, "text/plain", "Method Not Allowed");
+        return;
+    }
+
+    int slotIndex = g_server->hasArg("slotIndex") ? g_server->arg("slotIndex").toInt() : -1;
+    ConfigManager* cfg = g_app->getConfigManager();
+    SlotConfig& sc = cfg->getSlotConfig();
+
+    if (slotIndex < 0 || slotIndex >= sc.slotCount) {
+        g_server->send(200, "application/json", "{\"ok\":false,\"msg\":\"Ung\\u00fcltiger Slot-Index\"}");
+        return;
+    }
+
+    WateringScheduler* sched = g_app->getScheduler();
+    if (!sched) {
+        g_server->send(200, "application/json", "{\"ok\":false,\"msg\":\"Scheduler nicht verfügbar\"}");
+        return;
+    }
+
+    if (cfg->isAutomationLocked()) {
+        g_server->send(200, "application/json", "{\"ok\":false,\"msg\":\"Automatik-Hauptschalter aktiv – manueller Start gesperrt\"}");
+        return;
+    }
+
+    bool triggered = sched->triggerManualSlot(slotIndex);
+    const WateringSlot& slot = sc.slots[slotIndex];
+    String slotName = getSlotLabel(slot, slotIndex);
+
+    JsonDocument doc;
+    doc["ok"] = triggered;
+    if (triggered) {
+        doc["msg"] = String("Slot ") + slotName + " gestartet.";
+    } else {
+        doc["msg"] = String("Slot ") + slotName + " wurde nicht gestartet (Wetterregel greift oder Slot deaktiviert).";
+    }
+    String json;
+    serializeJson(doc, json);
+    g_server->send(200, "application/json", json);
+    Serial.printf("[Web] POST /api/trigger_slot slot=%d ok=%d\n", slotIndex, triggered ? 1 : 0);
 }

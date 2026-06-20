@@ -79,6 +79,7 @@ struct HardwareConfig {
 #define TRIGGER_SUNSET      2   // Sunset  (from weather data; fallback = fixedHour:fixedMinute)
 #define TRIGGER_MIDDAY      3   // Midpoint between sunrise and sunset
 #define TRIGGER_OFFSET      4   // Offset (+/- minutes) relative to offsetBase
+#define TRIGGER_MANUAL      5   // Manual only – never fires automatically; triggered via API
 
 // Base reference for TRIGGER_OFFSET
 #define OFFSET_BASE_SUNRISE 0
