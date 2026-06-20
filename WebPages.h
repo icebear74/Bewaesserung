@@ -707,6 +707,7 @@ function onRuleChanged(wi,ri){
     windowHours: (row.querySelector('input[name=\"wt'+wi+'_r'+ri+'_windowHours\"]')||{}).value||24,
     effectPercent: (row.querySelector('input[name=\"wt'+wi+'_r'+ri+'_effectPct\"]')||{}).value||25
   });
+  updateWeatherTemplateSummary(wi);
 }
 function onRuleActionChange(wi,ri,v){
   var eff=document.getElementById('wt'+wi+'r'+ri+'EffectRow');
@@ -741,18 +742,23 @@ function addWeatherRule(wi,d){
   var list=document.getElementById('wtRules'+wi); if(list) list.insertAdjacentHTML('beforeend', mkWeatherRule(wi,next,d||{}));
   var cnt=document.getElementById('wt'+wi+'RuleCount'); if(cnt) cnt.value=String(next+1);
   var msg=document.getElementById('wt'+wi+'NoRulesMsg'); if(msg) msg.style.display='none';
+  updateWeatherTemplateSummary(wi);
 }
 function deleteWeatherRule(wi,ri){
   var el=document.getElementById('wtr'+wi+'_'+ri); if(el) el.remove();
   var list=document.getElementById('wtRules'+wi), msg=document.getElementById('wt'+wi+'NoRulesMsg');
   if(list&&msg&&list.children.length===0) msg.style.display='block';
+  updateWeatherTemplateSummary(wi);
 }
 function mkWeatherTemplate(wi,d){
   d=d||{}; var nm=d.name||('Wetter '+(wi+1)); var rules=d.rules||[];
+  var tmplSumParts=[];for(var rsi=0;rsi<rules.length;rsi++){if(rules[rsi].enabled!==false)tmplSumParts.push(ruleSummary(rules[rsi]));}
+  var tmplSumTxt=tmplSumParts.length?tmplSumParts.length+' aktive Regel(n): '+tmplSumParts.join(' | '):'Keine aktiven Regeln.';
   var html='<div class=\"pump-entry\" id=\"wt'+wi+'\" data-next-rule=\"'+rules.length+'\" style=\"border:1px solid #cfe0f6;padding:12px;margin-bottom:12px;border-radius:6px;background:#f7fbff\">'
     +'<div style=\"display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px\"><b style=\"font-size:1.05em\">🌦️ '+nm+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editWeatherTemplate('+wi+')\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteWeatherTemplate('+wi+')\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
     +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Ein Wetter-Template ist eine wiederverwendbare Sammlung aus mehreren Wetterregeln.\">Name</label><input type=\"text\" name=\"wt'+wi+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateWeatherTemplateHeading('+wi+',this)\" required></div></div>'
-    +'<div class=\"hint-text\" style=\"margin-bottom:8px\">Ein Template kann mehrere Regeln enthalten. Reihenfolge im System: erst <b>Aussetzen</b>, danach <b>Verkürzen/Verlängern</b>. Zuschläge und Abzüge beziehen sich immer auf die Basislaufzeit der Zuweisung.</div>'
+    +'<div class=\"hint-text\" style=\"margin-bottom:4px\">Ein Template kann mehrere Regeln enthalten. Reihenfolge im System: erst <b>Aussetzen</b>, danach <b>Verkürzen/Verlängern</b>. Zuschläge und Abzüge beziehen sich immer auf die Basislaufzeit der Zuweisung.</div>'
+    +'<div class=\"hint-text\" id=\"wtSummaryLine'+wi+'\" style=\"border-left:3px solid #5c88c8;padding-left:8px;margin-bottom:10px;font-size:12px\">'+tmplSumTxt+'</div>'
     +'<input type=\"hidden\" name=\"wt'+wi+'_ruleCount\" id=\"wt'+wi+'RuleCount\" value=\"'+rules.length+'\">'
     +'<div id=\"wtRules'+wi+'\">';
   for(var i=0;i<rules.length;i++) html+=mkWeatherRule(wi,i,rules[i]);
@@ -810,9 +816,22 @@ function mkSlot(si,d){
   var repNames=['Wochentage','Intervall (alle N Tage)'], repOpts=''; for(var r=0;r<2;r++) repOpts+='<option value=\"'+r+'\"'+(repeatMode===r?' selected':'')+'>'+repNames[r]+'</option>';
   var baseNames=['Sonnenaufgang','Sonnenuntergang','Mittagszeit'], baseOpts=''; for(var b=0;b<3;b++) baseOpts+='<option value=\"'+b+'\"'+(offBase===b?' selected':'')+'>'+baseNames[b]+'</option>';
   var offDisp=(tr===4)?'flex':'none';
+  var bNamesS=['Sonnenaufgang','Sonnenuntergang','Mittagszeit'];
+  var trgS='';
+  if(tr===0) trgS='Feste Uhrzeit: '+timVal;
+  else if(tr===1) trgS='Sonnenaufgang (Fallback: '+timVal+')';
+  else if(tr===2) trgS='Sonnenuntergang (Fallback: '+timVal+')';
+  else if(tr===3) trgS='Mittagszeit (Fallback: '+timVal+')';
+  else if(tr===4){var odir=offMin>=0?'+':''; trgS=odir+offMin+' Min. relativ zu '+(bNamesS[offBase]||'?')+' (Fallback: '+timVal+')';}
+  else trgS='Nur manuell';
+  var actD2=[];for(var dd2=0;dd2<7;dd2++){if(days&(1<<dd2))actD2.push(dayL[dd2]);}
+  var schedS='';
+  if(tr!==5){if(repeatMode===0){schedS=actD2.length===7?'täglich':(actD2.length===0?'kein Tag aktiv':actD2.join(', '));}else{schedS='alle '+intervalDays+' Tage';}}
+  var initSum=trgS+(schedS?' \u2022 '+schedS:'');
   return '<div class=\"pump-entry\" id=\"slot'+si+'\" style=\"border:1px solid #b3d4b3;padding:12px;margin-bottom:12px;border-radius:6px;background:#f9fff9\">'
-    +'<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px\"><b style=\"font-size:1.05em\">&#128337; '+si1+' &ndash; '+nm+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editSlot('+si+')\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteSlot('+si+')\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
-    +'<div id=\"slotBody'+si+'\" style=\"display:block\"><div class=\"form-row\"><div class=\"form-col\"><label title=\"Nur aktive Slots werden geprüft.\"><input type=\"checkbox\" name=\"s'+si+'_enabled\" '+en+'> Aktiv</label></div><div class=\"form-col\"><label title=\"Ein Slot ist ein reiner Zeit-Auslöser. Wetterlogik gehört in die Zuweisung über ein Wetter-Template.\">Name</label><input type=\"text\" name=\"s'+si+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateSlotHeading('+si+',this)\" required></div></div>'
+    +'<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:4px\"><b style=\"font-size:1.05em\">&#128337; '+si1+' &ndash; '+nm+'</b><div style=\"display:flex;gap:6px;flex-wrap:wrap\"><button type=\"button\" onclick=\"editSlot('+si+')\" style=\"padding:3px 10px;background:#17a2b8;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#9998; Bearbeiten</button><button type=\"button\" onclick=\"deleteSlot('+si+')\" style=\"padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer\">&#10005; L&#246;schen</button></div></div>'
+    +'<p class=\"hint-text\" id=\"slotSummary'+si+'\" style=\"font-size:12px;margin:0 0 8px\">'+initSum+'</p>'
+    +'<div id=\"slotBody'+si+'\" style=\"display:block\" onchange=\"updateSlotSummary('+si+')\" oninput=\"updateSlotSummary('+si+')\"><div class=\"form-row\"><div class=\"form-col\"><label title=\"Nur aktive Slots werden geprüft.\"><input type=\"checkbox\" name=\"s'+si+'_enabled\" '+en+'> Aktiv</label></div><div class=\"form-col\"><label title=\"Ein Slot ist ein reiner Zeit-Auslöser. Wetterlogik gehört in die Zuweisung über ein Wetter-Template.\">Name</label><input type=\"text\" name=\"s'+si+'_name\" value=\"'+nm+'\" maxlength=\"31\" oninput=\"updateSlotHeading('+si+',this)\" required></div></div>'
     +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Legt fest, worauf sich der Slot zeitlich bezieht: feste Uhrzeit, Sonnenaufgang, Sonnenuntergang oder Offset relativ dazu.\">Ausl&ouml;ser</label><select name=\"s'+si+'_trigger\" onchange=\"onTriggerChange('+si+',this.value)\">'+trOpts+'</select></div><div id=\"timeCol'+si+'\" class=\"form-col\" style=\"display:'+(tr===5?'none':'')+'\"><label title=\"Diese Uhrzeit wird bei festen Slots direkt verwendet und dient bei astronomischen Triggern als Fallback, falls keine Wetter-/Astronomiedaten vorliegen.\">Uhrzeit / Fallback</label><input type=\"time\" name=\"s'+si+'_time\" value=\"'+timVal+'\"></div></div>'
     +'<div id=\"offsetRow'+si+'\" style=\"display:'+offDisp+'\" class=\"form-row\"><div class=\"form-col\"><label title=\"Relativ bedeutet: Der Start wird von Sonnenaufgang, Sonnenuntergang oder Mittagszeit aus berechnet.\">Offset-Basis</label><select name=\"s'+si+'_offsetBase\">'+baseOpts+'</select></div><div class=\"form-col\"><label title=\"Negativ = davor, positiv = danach. Beispiel: -30 bedeutet 30 Minuten vor der gewählten Basis.\">Offset (Min., negativ = davor, positiv = danach)</label><input type=\"number\" name=\"s'+si+'_offsetMin\" value=\"'+offMin+'\" min=\"-720\" max=\"720\"></div></div>'
     +'<div id=\"schedSection'+si+'\" style=\"display:'+(tr===5?'none':'block')+'\">'
@@ -822,6 +841,41 @@ function mkSlot(si,d){
      +'</div>'
      +'<div class=\"form-row\"><div class=\"form-col\"><label title=\"Sperrt nur diesen Slot temporär. Andere Slots laufen normal.\"><input type=\"checkbox\" name=\"s'+si+'_lockEnabled\" '+lockEn+'> Slot temporär sperren</label></div><div class=\"form-col\"><label title=\"Dauer ab jetzt in Stunden für diese Slot-Sperre.\">Sperrdauer (h)</label><input type=\"number\" name=\"s'+si+'_lockHours\" value=\"'+lockHours+'\" min=\"1\" max=\"168\"></div></div>'
      +'</div></div>';
+}
+function updateSlotSummary(si){
+  var el=document.getElementById('slotSummary'+si); if(!el) return;
+  var tr=parseInt((document.querySelector('[name=\"s'+si+'_trigger\"]')||{}).value||'0',10);
+  var tim=((document.querySelector('[name=\"s'+si+'_time\"]')||{}).value)||'06:00';
+  var offMin=parseInt((document.querySelector('[name=\"s'+si+'_offsetMin\"]')||{}).value||'0',10);
+  var offBase=parseInt((document.querySelector('[name=\"s'+si+'_offsetBase\"]')||{}).value||'0',10);
+  var bN=['Sonnenaufgang','Sonnenuntergang','Mittagszeit'];
+  var tl='';
+  if(tr===0) tl='Feste Uhrzeit: '+tim;
+  else if(tr===1) tl='Sonnenaufgang (Fallback: '+tim+')';
+  else if(tr===2) tl='Sonnenuntergang (Fallback: '+tim+')';
+  else if(tr===3) tl='Mittagszeit (Fallback: '+tim+')';
+  else if(tr===4){var od=offMin>=0?'+':''; tl=od+offMin+' Min. relativ zu '+(bN[offBase]||'?')+' (Fallback: '+tim+')';}
+  else tl='Nur manuell';
+  var rMode=parseInt((document.querySelector('[name=\"s'+si+'_repeatMode\"]')||{}).value||'0',10);
+  var sc='';
+  if(tr!==5){
+    if(rMode===0){var ad=[];for(var d=0;d<7;d++){var cb=document.querySelector('[name=\"s'+si+'_d'+d+'\"]');if(cb&&cb.checked)ad.push(dayL[d]);}sc=ad.length===7?'täglich':(ad.length===0?'kein Tag aktiv':ad.join(', '));}
+    else{var n=parseInt((document.querySelector('[name=\"s'+si+'_intervalDays\"]')||{}).value||'1',10);sc='alle '+n+' Tage';}
+  }
+  el.textContent=tl+(sc?' \u2022 '+sc:'');
+}
+function updateWeatherTemplateSummary(wi){
+  var sumLine=document.getElementById('wtSummaryLine'+wi); if(!sumLine) return;
+  var ruleRows=document.querySelectorAll('#wtRules'+wi+'>div');
+  var parts=[];
+  ruleRows.forEach(function(row){
+    var idAttr=row.id||''; var ri=parseInt(idAttr.replace('wtr'+wi+'_',''),10);
+    if(isNaN(ri)) return;
+    var sd=document.getElementById('wt'+wi+'r'+ri+'Summary');
+    var cb=row.querySelector('input[type=checkbox]');
+    if(sd&&(!cb||cb.checked)) parts.push(sd.textContent||'');
+  });
+  sumLine.textContent=parts.length?parts.length+' aktive Regel(n): '+parts.join(' | '):'Keine aktiven Regeln.';
 }
 function prepareSubmit(){ document.getElementById('slotCount').value=_nextSlotIdx; document.getElementById('weatherTemplateCount').value=_nextWeatherTemplateIdx; document.getElementById('assignCount').value=_nextAssignIdx; }
 onAutomationLockToggle((document.getElementById('automationLockEnabled')||{}).checked);
@@ -864,6 +918,23 @@ const char HTML_WATERING_TEST_PAGE[] PROGMEM = R"rawhtml(
   <div id="simWeatherContext" style="margin:10px 0;padding:10px;border:1px solid #dde7dd;border-radius:6px;background:#f8fff8"></div>
   <button class="btn" type="button" onclick="runSim()">Simulation starten</button>
   <div id="simResult" style="margin-top:14px"></div>
+</div>
+<div class="card">
+  <h1>&#128197; Zeitplan-Vorschau (24h / 48h)</h1>
+  <div class="alert-info">
+    Zeigt f&#252;r die n&#228;chsten Stunden, welche Slots ausl&#246;sen w&#252;rden, welche Pumpen laufen und
+    warum &ndash; basierend auf dem aktuellen Wetter-Cache und der aktiven Konfiguration.
+    Keine Hardware wird aktiviert.
+  </div>
+  <div class="form-row" style="margin-bottom:0">
+    <div class="form-col">
+      <button class="btn" type="button" onclick="runTimeline(24)">&#9654; N&#228;chste 24 Stunden</button>
+    </div>
+    <div class="form-col">
+      <button class="btn" type="button" onclick="runTimeline(48)" style="background:#5a6268">&#9654; N&#228;chste 48 Stunden</button>
+    </div>
+  </div>
+  <div id="timelineResult" style="margin-top:14px"></div>
 </div>
 <script>
 var slots={slot_options_json};
@@ -932,6 +1003,54 @@ function runSim(){
     out.innerHTML=h+'</div>';
   })
   .catch(function(){ out.innerHTML='<p style=\"color:#dc3545\">Simulation fehlgeschlagen.</p>'; });
+}
+function escT(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
+function actionColorT(a){return a==='skip'?'#dc3545':(a==='reduce'?'#d48a00':(a==='extend'?'#0b7285':'#1a6b3c'));}
+function actionLabelT(a){return a==='skip'?'Aussetzen':(a==='reduce'?'Verk\u00fcrzt':(a==='extend'?'Verl\u00e4ngert':(a==='fallback'?'Fallback':'Ausf\u00fchren')));}
+function runTimeline(hours){
+  var out=document.getElementById('timelineResult');
+  out.innerHTML='<p>&#8987; Berechne Vorschau f\u00fcr '+hours+'h \u2026</p>';
+  fetch('/api/watering_simulate_timeline',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'horizonHours='+hours+'&stepMinutes=15'})
+  .then(function(r){return r.json();})
+  .then(function(d){renderTimeline(d,hours);})
+  .catch(function(){out.innerHTML='<p style=\"color:#dc3545\">Fehler beim Laden der Vorschau.</p>';});
+}
+function renderTimeline(d,hours){
+  var out=document.getElementById('timelineResult');
+  var events=[];
+  if(d.steps){d.steps.forEach(function(step){if(step.slots&&step.slots.length){step.slots.forEach(function(sl){events.push({time:step.time,slot:sl});});}});}
+  var wState=d.weatherAvailable?(d.weatherStale?'&#9888;&#65039; veraltet':'&#10003; frisch'):'&#10005; nicht verf\u00fcgbar';
+  var h='<p class=\"hint-text\" style=\"margin-bottom:10px\">Erstellt: '+escT(d.generatedAt)+'&nbsp;&nbsp;|&nbsp;&nbsp;Wetter: '+wState+'</p>';
+  if(events.length===0){
+    h+='<p style=\"color:#1a6b3c;font-style:italic\">&#10003; In den n\u00e4chsten '+hours+' Stunden ist keine Bew\u00e4sserung geplant.</p>';
+  } else {
+    h+='<div class=\"table-wrap\"><table class=\"compact-table\"><thead><tr>'
+      +'<th>Zeit</th><th>Slot</th><th>Aktion</th><th>Pumpen &amp; Regeln</th><th>Dauer</th><th>Grund</th>'
+      +'</tr></thead><tbody>';
+    events.forEach(function(ev){
+      var sl=ev.slot;
+      var col=actionColorT(sl.action);
+      var pumpList='';
+      if(sl.plan&&sl.plan.length){
+        sl.plan.forEach(function(p){
+          var pdur=p.action==='skip'?'&ndash;':(p.plannedDurationSec+'s');
+          var rules=p.appliedRules?(' &#9656; <i>'+escT(p.appliedRules)+'</i>'):'';
+          pumpList+='<div style=\"font-size:12px\"><b>'+escT(p.pumpName)+'</b>: <span style=\"color:'+actionColorT(p.action)+'\">'+actionLabelT(p.action)+'</span> '+pdur+rules+'</div>';
+        });
+      }
+      var trigInfo=sl.triggerSource?'<br><span style=\"font-size:11px;color:#666\">Trigger: '+escT(sl.triggerSource)+'</span>':'';
+      h+='<tr>'
+        +'<td style=\"white-space:nowrap\">'+escT(ev.time)+'</td>'
+        +'<td>'+escT(sl.slotName)+trigInfo+'</td>'
+        +'<td style=\"color:'+col+';font-weight:bold\">'+actionLabelT(sl.action)+'</td>'
+        +'<td>'+pumpList+'</td>'
+        +'<td style=\"white-space:nowrap\">'+(sl.totalDurationSec?sl.totalDurationSec+'s':'&ndash;')+'</td>'
+        +'<td style=\"font-size:12px\">'+escT(sl.reason||'')+(sl.warnings?'<br><span style=\"color:#d48a00\">'+escT(sl.warnings)+'</span>':'')+'</td>'
+        +'</tr>';
+    });
+    h+='</tbody></table></div>';
+  }
+  out.innerHTML=h;
 }
 </script>
 )rawhtml";
@@ -1063,10 +1182,26 @@ const char HTML_BACKUP_PAGE[] PROGMEM = R"rawhtml(
   <div class="config-section">
     <h2>&#8595; Backup herunterladen</h2>
     <p class="hint-text" style="margin-bottom:12px">
-      L&#228;dt eine einzige JSON-Datei herunter, die alle Konfigurationen enth&#228;lt
-      (WLAN, Zeit, Standort, Hardware, Bew&#228;sserungsplan).
+      W&#228;hlen Sie, ob Passw&#246;rter (WLAN, OTA) im Backup enthalten sein sollen:
     </p>
-    <a class="btn" href="/api/backup">&#8595; Backup jetzt herunterladen</a>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px;border:1px solid #c8e0c8;border-radius:6px;padding:14px;background:#f8fff8">
+        <b>&#128274; Vollst&#228;ndiges Backup</b>
+        <p class="hint-text" style="margin:6px 0 10px">
+          Enth&#228;lt <b>alle</b> Einstellungen inkl. WLAN-Name, WLAN-Passwort und OTA-Passwort.<br>
+          Nur f&#252;r private Sicherung &ndash; nicht zum Teilen geeignet.
+        </p>
+        <a class="btn" href="/api/backup">&#8595; Vollst&#228;ndig herunterladen</a>
+      </div>
+      <div style="flex:1;min-width:220px;border:1px solid #c8d8e8;border-radius:6px;padding:14px;background:#f5f9ff">
+        <b>&#128275; Sicheres Backup (ohne Passw&#246;rter)</b>
+        <p class="hint-text" style="margin:6px 0 10px">
+          WLAN- und OTA-Passwort werden <b>nicht</b> gespeichert.<br>
+          Geeignet zum Teilen oder f&#252;r Konfigurationssicherung ohne Zugangsdaten.
+        </p>
+        <a class="btn" href="/api/backup?safe=1" style="background:#5a6268">&#8595; Sicher herunterladen</a>
+      </div>
+    </div>
   </div>
   <div class="config-section">
     <h2>&#8593; Konfiguration wiederherstellen</h2>
