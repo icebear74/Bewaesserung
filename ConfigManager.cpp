@@ -422,7 +422,7 @@ bool ConfigManager::loadSlotConfig() {
             JsonObject so = sArr[i].as<JsonObject>();
             strlcpy(s.name, so["name"] | "", sizeof(s.name));
             s.enabled         = so["enabled"]       | true;
-            s.triggerType     = (uint8_t)constrain((int)(so["triggerType"] | 0), 0, 4);
+            s.triggerType     = (uint8_t)constrain((int)(so["triggerType"] | 0), 0, 5);
             s.fixedHour       = (uint8_t)constrain((int)(so["fixedHour"]   | 6), 0, 23);
             s.fixedMinute     = (uint8_t)constrain((int)(so["fixedMinute"] | 0), 0, 59);
             s.offsetMinutes   = (int16_t)constrain((int)(so["offsetMinutes"] | 0), -720, 720);
