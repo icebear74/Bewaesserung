@@ -348,6 +348,12 @@ bool ConfigManager::saveHardwareConfig() {
     doc["relayCount"]    = _hardwareConfig.relayCount;
     doc["relayInverted"] = _hardwareConfig.relayInverted;
     doc["displayMode"]   = _hardwareConfig.displayMode;
+    // Human-readable label for displayMode (informational, not parsed on load)
+    {
+        static const char* displayModeLabels[] = {"OLED (SSD1306)", "TFT (ST7735)", "OLED + TFT"};
+        uint8_t dm = _hardwareConfig.displayMode;
+        if (dm <= 2) doc["displayMode_label"] = displayModeLabels[dm];
+    }
     doc["tftCsPin"]      = _hardwareConfig.tftCsPin;
     doc["tftRstPin"]     = _hardwareConfig.tftRstPin;
     doc["tftDcPin"]      = _hardwareConfig.tftDcPin;
@@ -358,6 +364,8 @@ bool ConfigManager::saveHardwareConfig() {
         eo["enabled"]    = e.enabled;
         eo["name"]       = e.name;
         eo["chipType"]   = e.chipType;
+        // Human-readable label for chipType (informational, not parsed on load)
+        eo["chipType_label"] = (e.chipType == EXPANDER_TYPE_PCF8575) ? "PCF8575 (16 Ports)" : "PCF8574 (8 Ports)";
         eo["i2cAddress"] = e.i2cAddress;
     }
     JsonArray pumps = doc["pumps"].to<JsonArray>();
@@ -367,6 +375,8 @@ bool ConfigManager::saveHardwareConfig() {
         po["enabled"]       = p.enabled;
         po["name"]          = p.name;
         po["outputType"]    = p.outputType;
+        // Human-readable label for outputType (informational, not parsed on load)
+        po["outputType_label"] = (p.outputType == OUTPUT_TYPE_PCF8574) ? "PCF8574 I2C-Expander" : "Direkt GPIO";
         po["pin"]           = p.pin;
         po["expanderIndex"] = p.expanderIndex;
         po["i2cChannel"]    = p.i2cChannel;
@@ -412,7 +422,7 @@ bool ConfigManager::loadSlotConfig() {
             JsonObject so = sArr[i].as<JsonObject>();
             strlcpy(s.name, so["name"] | "", sizeof(s.name));
             s.enabled         = so["enabled"]       | true;
-            s.triggerType     = (uint8_t)constrain((int)(so["triggerType"] | 0), 0, 4);
+            s.triggerType     = (uint8_t)constrain((int)(so["triggerType"] | 0), 0, 5);
             s.fixedHour       = (uint8_t)constrain((int)(so["fixedHour"]   | 6), 0, 23);
             s.fixedMinute     = (uint8_t)constrain((int)(so["fixedMinute"] | 0), 0, 59);
             s.offsetMinutes   = (int16_t)constrain((int)(so["offsetMinutes"] | 0), -720, 720);
@@ -439,6 +449,8 @@ bool ConfigManager::loadSlotConfig() {
                 wt = WeatherTemplate{};
                 JsonObject wto = wtArr[i].as<JsonObject>();
                 strlcpy(wt.name, wto["name"] | "", sizeof(wt.name));
+                wt.rainSmoothEnabled = wto["rainSmoothEnabled"] | false;
+                wt.rainSmoothMaxPct = (uint8_t)constrain((int)(wto["rainSmoothMaxPct"] | 50), 5, 90);
                 clearWeatherTemplateRules(wt);
                 if (wto["rules"].is<JsonArray>()) {
                     JsonArray rules = wto["rules"].as<JsonArray>();
@@ -455,7 +467,7 @@ bool ConfigManager::loadSlotConfig() {
                                                              WEATHER_OP_GT, WEATHER_OP_LTE);
                         rule.threshold = ro["threshold"] | 0.0f;
                         rule.effectPercent = (uint8_t)constrain((int)(ro["effectPercent"] | 25), 1, 200);
-                        rule.windowHours = (uint8_t)constrain((int)(ro["windowHours"] | 24), 1, 48);
+                        rule.windowHours = (int16_t)constrain((int)(ro["windowHours"] | 24), -72, 120);
                     }
                 } else {
                     if (wto["rules"] && !wto["rules"].is<JsonArray>()) {
@@ -534,6 +546,28 @@ bool ConfigManager::loadSlotConfig() {
 
         Serial.printf("[Config] Slot config loaded: %d slots, %d assignments.\n",
                       _slotConfig.slotCount, _slotConfig.assignCount);
+
+        // ── Migration: fix mis-saved TRIGGER_MANUAL slots ─────────────────────
+        // Old firmware used constrain(0-4) instead of constrain(0-5) when saving
+        // the trigger type, so TRIGGER_MANUAL (5) was silently stored as
+        // TRIGGER_OFFSET (4) with offsetMinutes=0 and offsetBase=OFFSET_BASE_SUNRISE.
+        // "Offset 0 minutes from sunrise" is identical to TRIGGER_SUNRISE and is
+        // never set intentionally; treat it as a mis-saved TRIGGER_MANUAL and fix it.
+        {
+            bool migrated = false;
+            for (int si = 0; si < _slotConfig.slotCount; si++) {
+                WateringSlot& s = _slotConfig.slots[si];
+                if (s.triggerType == TRIGGER_OFFSET
+                        && s.offsetMinutes == 0
+                        && s.offsetBase == OFFSET_BASE_SUNRISE) {
+                    Serial.printf("[Config] Migration: slot '%s' triggerType OFFSET+0@sunrise → MANUAL\n", s.name);
+                    s.triggerType = TRIGGER_MANUAL;
+                    migrated = true;
+                }
+            }
+            if (migrated) saveSlotConfig();
+        }
+
         return true;
     }
 
@@ -584,6 +618,22 @@ bool ConfigManager::saveSlotConfig() {
     JsonDocument doc;
     doc["automationLockEnabled"] = _slotConfig.automationLockEnabled;
     doc["automationLockUntil"]   = (long)_slotConfig.automationLockUntil;
+    // Helper: build a comma-separated string of active weekday names from bitmask
+    // bit0=Mo, bit1=Di, bit2=Mi, bit3=Do, bit4=Fr, bit5=Sa, bit6=So
+    auto makeDaysLabel = [](uint8_t daysMask, char* buf, size_t bufLen) {
+        static const char* dayNames[] = {"Mo","Di","Mi","Do","Fr","Sa","So"};
+        buf[0] = '\0';
+        bool first = true;
+        for (int d = 0; d < 7; d++) {
+            if (daysMask & (1 << d)) {
+                if (!first) strncat(buf, ", ", bufLen - strlen(buf) - 1);
+                strncat(buf, dayNames[d], bufLen - strlen(buf) - 1);
+                first = false;
+            }
+        }
+        if (first) strncat(buf, "–", bufLen - strlen(buf) - 1);
+    };
+
     JsonArray sArr = doc["slots"].to<JsonArray>();
     for (int i = 0; i < _slotConfig.slotCount; i++) {
         const WateringSlot& s = _slotConfig.slots[i];
@@ -591,12 +641,27 @@ bool ConfigManager::saveSlotConfig() {
         so["name"]           = s.name;
         so["enabled"]        = s.enabled;
         so["triggerType"]    = s.triggerType;
+        // Human-readable labels (informational, not parsed on load)
+        {
+            static const char* triggerLabels[] = {"Feste Uhrzeit","Sonnenaufgang","Sonnenuntergang","Mittagszeit","Offset","Manuell"};
+            if (s.triggerType <= 5) so["triggerType_label"] = triggerLabels[s.triggerType];
+        }
         so["fixedHour"]      = s.fixedHour;
         so["fixedMinute"]    = s.fixedMinute;
         so["offsetMinutes"]  = s.offsetMinutes;
         so["offsetBase"]     = s.offsetBase;
+        {
+            static const char* offsetBaseLabels[] = {"Sonnenaufgang","Sonnenuntergang","Mittagszeit"};
+            if (s.offsetBase <= 2) so["offsetBase_label"] = offsetBaseLabels[s.offsetBase];
+        }
         so["repeatMode"]     = s.repeatMode;
+        so["repeatMode_label"] = (s.repeatMode == REPEAT_INTERVAL_DAYS) ? "Intervall (alle N Tage)" : "Wochentage";
         so["days"]           = s.days;
+        {
+            char daysLabelBuf[64];
+            makeDaysLabel(s.days, daysLabelBuf, sizeof(daysLabelBuf));
+            so["days_label"] = daysLabelBuf;
+        }
         so["intervalDays"]   = s.intervalDays;
         so["intervalAnchorDay"] = s.intervalAnchorDay;
         so["lockEnabled"]    = s.lockEnabled;
@@ -612,14 +677,33 @@ bool ConfigManager::saveSlotConfig() {
             const WeatherTemplate& wt = _slotConfig.weatherTemplates[i];
             JsonObject wto = wtArr.add<JsonObject>();
             wto["name"] = wt.name;
+            wto["rainSmoothEnabled"] = wt.rainSmoothEnabled;
+            wto["rainSmoothMaxPct"]  = wt.rainSmoothMaxPct;
             JsonArray rules = wto["rules"].to<JsonArray>();
             for (int ri = 0; ri < wt.ruleCount; ri++) {
                 const WeatherRule& rule = wt.rules[ri];
                 JsonObject ro = rules.add<JsonObject>();
                 ro["enabled"] = rule.enabled;
                 ro["actionType"] = rule.actionType;
+                {
+                    static const char* actionLabels[] = {"Überspringen","Laufzeit reduzieren","Laufzeit erhöhen"};
+                    if (rule.actionType <= 2) ro["actionType_label"] = actionLabels[rule.actionType];
+                }
                 ro["metric"] = rule.metric;
+                {
+                    static const char* metricLabels[] = {
+                        "Aktuelle Temperatur","Tagesmax. Temperatur",
+                        "Aktueller Regen (mm)","Aktuelle Regenwahrsch. (%)",
+                        "Tagesregen (mm)","Tages-Regenwahrsch. (%)",
+                        "Vorhersage Regen Summe (mm)","Vorhersage Regenwahrsch. max (%)"
+                    };
+                    if (rule.metric <= 7) ro["metric_label"] = metricLabels[rule.metric];
+                }
                 ro["comparison"] = rule.comparison;
+                {
+                    static const char* compLabels[] = {">",">=","<","<="};
+                    if (rule.comparison <= 3) ro["comparison_label"] = compLabels[rule.comparison];
+                }
                 ro["threshold"] = rule.threshold;
                 ro["effectPercent"] = rule.effectPercent;
                 ro["windowHours"] = rule.windowHours;
@@ -659,6 +743,29 @@ bool ConfigManager::isAutomationLocked(time_t nowLocal) const {
     if (nowLocal <= 0) nowLocal = time(nullptr);
     if (nowLocal <= 0) return false;
     return nowLocal < _slotConfig.automationLockUntil;
+}
+
+bool ConfigManager::expireLocks(time_t nowLocal) {
+    if (nowLocal <= 0) nowLocal = time(nullptr);
+    if (nowLocal <= 0) return false;
+    bool changed = false;
+    if (_slotConfig.automationLockEnabled && _slotConfig.automationLockUntil > 0
+            && nowLocal >= _slotConfig.automationLockUntil) {
+        _slotConfig.automationLockEnabled = false;
+        _slotConfig.automationLockUntil   = 0;
+        changed = true;
+        Serial.println("[Config] Automatiksperre abgelaufen – automatisch zurückgesetzt.");
+    }
+    for (int i = 0; i < _slotConfig.slotCount; i++) {
+        WateringSlot& s = _slotConfig.slots[i];
+        if (s.lockEnabled && s.lockUntil > 0 && nowLocal >= s.lockUntil) {
+            s.lockEnabled = false;
+            s.lockUntil   = 0;
+            changed = true;
+            Serial.printf("[Config] Slot '%s' Sperre abgelaufen – automatisch zurückgesetzt.\n", s.name);
+        }
+    }
+    return changed;
 }
 
 bool ConfigManager::resetAll() {

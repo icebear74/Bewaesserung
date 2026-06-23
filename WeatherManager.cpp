@@ -54,7 +54,7 @@ bool WeatherManager::fetchNow() {
         "&hourly=temperature_2m,precipitation,precipitation_probability"
         "&daily=sunrise,sunset,precipitation_sum,"
         "precipitation_probability_max,temperature_2m_max,temperature_2m_min"
-        "&forecast_days=1&forecast_hours=24&timezone=auto",
+        "&past_hours=72&forecast_hours=48&timezone=auto",
         dc.latitude, dc.longitude);
     _lastError[0] = '\0';
     Serial.printf("[Weather] Request URL: %s\n", _lastRequestUrl);
@@ -143,7 +143,7 @@ bool WeatherManager::parseResponse(const String& body) {
     filter["daily"]["precipitation_probability_max"][0] = true;
     filter["daily"]["temperature_2m_max"][0]         = true;
     filter["daily"]["temperature_2m_min"][0]         = true;
-    for (int i = 0; i < 24; i++) {
+    for (int i = 0; i < MAX_HOURLY_DATA; i++) {
         filter["hourly"]["time"][i] = true;
         filter["hourly"]["temperature_2m"][i] = true;
         filter["hourly"]["precipitation"][i] = true;
@@ -193,7 +193,7 @@ bool WeatherManager::parseResponse(const String& body) {
         if (tempA.size() < (size_t)n) n = tempA.size();
         if (mmA.size() < (size_t)n) n = mmA.size();
         if (pctA.size() < (size_t)n) n = pctA.size();
-        if (n > 24) n = 24;
+        if (n > MAX_HOURLY_DATA) n = MAX_HOURLY_DATA;
         _data.hourlyCount = (uint8_t)n;
         for (int i = 0; i < n; i++) {
             const char* ts = ta[i] | "";

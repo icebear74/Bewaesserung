@@ -110,6 +110,11 @@ void WateringScheduler::update() {
     if (nowMinute == _lastCheckedMinute) return;
     _lastCheckedMinute = nowMinute;
 
+    // Auto-expire stale locks and persist if any changed
+    if (_cfg->expireLocks(now)) {
+        _cfg->saveSlotConfig();
+    }
+
     SlotConfig& sc = _cfg->getSlotConfig();
     HardwareConfig& hw = _cfg->getHardwareConfig();
     // Preflight weather refresh: if a slot triggers in ~1 minute, request update
@@ -147,6 +152,9 @@ void WateringScheduler::update() {
     }
 
     for (int si = 0; si < sc.slotCount; si++) {
+        // Manual slots are never triggered automatically
+        if (sc.slots[si].triggerType == TRIGGER_MANUAL) continue;
+
         WateringDecisionInput in;
         in.slotConfig = &sc;
         in.hardwareConfig = &hw;
@@ -164,10 +172,24 @@ void WateringScheduler::update() {
             if (_decisionBuf->triggerMatched) {
                 Serial.printf("[Sched] Slot '%s' skipped: %s\n",
                               sc.slots[si].name, _decisionBuf->reason);
+                // Log skip to decision history
+                if (_runLog) {
+                    _runLog->appendDecision(now, sc.slots[si].name, "skip",
+                                            _decisionBuf->reason, 0);
+                }
             }
             continue;
         }
         enqueueDecision(*_decisionBuf);
+        // Log the decision to history
+        if (_runLog) {
+            const char* actionStr = "execute";
+            if (_decisionBuf->action == WATER_ACTION_REDUCE) actionStr = "reduce";
+            else if (_decisionBuf->action == WATER_ACTION_EXTEND) actionStr = "extend";
+            else if (_decisionBuf->action == WATER_ACTION_FALLBACK) actionStr = "fallback";
+            _runLog->appendDecision(now, sc.slots[si].name, actionStr,
+                                    _decisionBuf->reason, _decisionBuf->totalDurationSec);
+        }
     }
 }
 
@@ -202,4 +224,55 @@ void WateringScheduler::enqueueDecision(const WateringDecisionResult& decision) 
         Serial.printf("[Sched] Slot '%s' queued – %d pump(s), action=%d, reason=%s\n",
                       slot.name, added, (int)decision.action, decision.reason);
     }
+}
+
+bool WateringScheduler::triggerManualSlot(int slotIndex) {
+    if (!_cfg || !_rm || !_decisionBuf) return false;
+
+    SlotConfig&    sc = _cfg->getSlotConfig();
+    HardwareConfig& hw = _cfg->getHardwareConfig();
+    if (slotIndex < 0 || slotIndex >= sc.slotCount) return false;
+
+    time_t now = time(nullptr);
+    if (now < 1000000L) {
+        Serial.println("[Sched] triggerManualSlot: clock not set.");
+        return false;
+    }
+
+    const WeatherData* weatherData = (_wm && _wm->isAvailable()) ? &_wm->getData() : nullptr;
+    bool weatherAvailable = (_wm && _wm->isAvailable());
+    bool weatherStale = (_wm && _wm->isStale());
+
+    WateringDecisionInput in;
+    in.slotConfig = &sc;
+    in.hardwareConfig = &hw;
+    in.weatherData = weatherData;
+    in.weatherAvailable = weatherAvailable;
+    in.weatherStale = weatherStale;
+    in.nowLocal = now;
+    in.slotIndex = slotIndex;
+    in.enforceDayMatch = false;
+    in.enforceTriggerMinute = false;
+
+    WateringDecisionEngine::evaluateSlot(in, *_decisionBuf);
+    Serial.printf("[Sched] Manual trigger slot '%s': action=%d reason=%s\n",
+                  sc.slots[slotIndex].name, (int)_decisionBuf->action, _decisionBuf->reason);
+
+    if (_decisionBuf->action == WATER_ACTION_SKIP) {
+        if (_runLog) {
+            _runLog->appendDecision(now, sc.slots[slotIndex].name, "manual-skip",
+                                    _decisionBuf->reason, 0);
+        }
+        return false;
+    }
+
+    enqueueDecision(*_decisionBuf);
+    if (_runLog) {
+        const char* actionStr = "manual";
+        if (_decisionBuf->action == WATER_ACTION_REDUCE) actionStr = "manual-reduce";
+        else if (_decisionBuf->action == WATER_ACTION_EXTEND) actionStr = "manual-extend";
+        _runLog->appendDecision(now, sc.slots[slotIndex].name, actionStr,
+                                _decisionBuf->reason, _decisionBuf->totalDurationSec);
+    }
+    return true;
 }

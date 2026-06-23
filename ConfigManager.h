@@ -79,6 +79,7 @@ struct HardwareConfig {
 #define TRIGGER_SUNSET      2   // Sunset  (from weather data; fallback = fixedHour:fixedMinute)
 #define TRIGGER_MIDDAY      3   // Midpoint between sunrise and sunset
 #define TRIGGER_OFFSET      4   // Offset (+/- minutes) relative to offsetBase
+#define TRIGGER_MANUAL      5   // Manual only – never fires automatically; triggered via API
 
 // Base reference for TRIGGER_OFFSET
 #define OFFSET_BASE_SUNRISE 0
@@ -158,7 +159,7 @@ struct WeatherRule {
     uint8_t comparison    = WEATHER_OP_GTE;
     float   threshold     = 0.0f;
     uint8_t effectPercent = 25;    // only used for increase/reduce rules
-    uint8_t windowHours   = 24;    // only used for forecast-based metrics
+    int16_t windowHours   = 24;    // signed: positive = future forecast, negative = past historical window (-72..+120)
 };
 
 struct WeatherTemplate {
@@ -166,6 +167,8 @@ struct WeatherTemplate {
     uint8_t       ruleCount = 0;
     WeatherRule   rules[MAX_WEATHER_RULES_PER_TEMPLATE];
     WeatherPolicy weather; // legacy import fields; migrated into rules on load
+    bool          rainSmoothEnabled  = false;  // adaptive reduction based on precipitation probability
+    uint8_t       rainSmoothMaxPct   = 50;     // max reduction % when precipProb reaches 100%
 };
 
 // Assignment: one pump runs for a given duration when a slot fires
@@ -191,6 +194,8 @@ struct SlotConfig {
 
 // ─── Weather data cache ───────────────────────────────────────────────────────
 
+#define MAX_HOURLY_DATA 120  // max hourly samples: 72h past + 48h future
+
 struct WeatherData {
     float   temperature    = 0.0f;   // °C current
     float   feelsLike      = 0.0f;   // °C apparent temperature
@@ -207,11 +212,11 @@ struct WeatherData {
     float   dailyPrecipPct = 0.0f;   // today's max precipitation probability (%)
     time_t  sunrise        = 0;      // today's sunrise (local epoch)
     time_t  sunset         = 0;      // today's sunset  (local epoch)
-    uint8_t hourlyCount    = 0;      // number of valid forecast samples (max 24)
-    time_t  hourlyTime[24] = {0};
-    float   hourlyTemp[24] = {0};
-    float   hourlyPrecipMm[24] = {0};
-    float   hourlyPrecipPct[24] = {0};
+    uint8_t hourlyCount    = 0;      // number of valid samples (max MAX_HOURLY_DATA = 120)
+    time_t  hourlyTime[MAX_HOURLY_DATA]     = {};
+    float   hourlyTemp[MAX_HOURLY_DATA]     = {};
+    float   hourlyPrecipMm[MAX_HOURLY_DATA] = {};
+    float   hourlyPrecipPct[MAX_HOURLY_DATA]= {};
     time_t  lastUpdate     = 0;      // when data was last successfully fetched
     bool    available      = false;  // true if data has been fetched at least once
 };
@@ -236,6 +241,10 @@ public:
     bool isWateringConfigValid() const;
     bool isAutomationLocked(time_t nowLocal = 0) const;
     time_t getAutomationLockUntil() const { return _slotConfig.automationLockUntil; }
+
+    // Expire locks that have passed their lockUntil timestamp.
+    // Returns true if any lock was changed (caller should save if desired).
+    bool expireLocks(time_t nowLocal = 0);
 
     bool resetAll();
 
