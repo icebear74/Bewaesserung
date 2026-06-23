@@ -359,17 +359,20 @@ static void handleStatus() {
     }
 
     // ── Manual slot trigger section ───────────────────────────────────────────
-    // Show a "Jetzt starten" button for every slot so users can manually trigger
-    // any slot at any time, regardless of its configured trigger type. This also
-    // covers the case where a TRIGGER_MANUAL slot was mis-saved as TRIGGER_OFFSET
-    // due to an earlier firmware bug (constrain 0-4 instead of 0-5).
+    // Show a "Jetzt starten" button only for TRIGGER_MANUAL slots.
+    // Time-based slots (morgens, abends, …) must never be started from this page.
     {
         String manualHtml;
-        if (sc.slotCount > 0) {
+        int manualSlotCount = 0;
+        for (int si = 0; si < sc.slotCount; si++) {
+            if (sc.slots[si].triggerType == TRIGGER_MANUAL) manualSlotCount++;
+        }
+        if (manualSlotCount > 0) {
             manualHtml += "<h2 style='margin-top:16px;color:#1a6b3c'>&#9654; Jetzt bew&auml;ssern</h2>";
             manualHtml += "<div style='display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px'>";
             for (int si = 0; si < sc.slotCount; si++) {
                 const WateringSlot& ms = sc.slots[si];
+                if (ms.triggerType != TRIGGER_MANUAL) continue;
                 String slotLabel = getSlotLabel(ms, si);
                 bool slotLocked = ms.lockEnabled && ms.lockUntil > 0 && now < ms.lockUntil;
                 String btnStyle = slotLocked
@@ -3006,6 +3009,11 @@ static void handleApiTriggerSlot() {
 
     if (slotIndex < 0 || slotIndex >= sc.slotCount) {
         g_server->send(200, "application/json", "{\"ok\":false,\"msg\":\"Ung\\u00fcltiger Slot-Index\"}");
+        return;
+    }
+
+    if (sc.slots[slotIndex].triggerType != TRIGGER_MANUAL) {
+        g_server->send(200, "application/json", "{\"ok\":false,\"msg\":\"Nur Slots vom Typ \\\"Manuell\\\" k\\u00f6nnen \\u00fcber diese Schnittstelle ausgel\\u00f6st werden\"}");
         return;
     }
 

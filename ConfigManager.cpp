@@ -546,6 +546,28 @@ bool ConfigManager::loadSlotConfig() {
 
         Serial.printf("[Config] Slot config loaded: %d slots, %d assignments.\n",
                       _slotConfig.slotCount, _slotConfig.assignCount);
+
+        // ── Migration: fix mis-saved TRIGGER_MANUAL slots ─────────────────────
+        // Old firmware used constrain(0-4) instead of constrain(0-5) when saving
+        // the trigger type, so TRIGGER_MANUAL (5) was silently stored as
+        // TRIGGER_OFFSET (4) with offsetMinutes=0 and offsetBase=OFFSET_BASE_SUNRISE.
+        // "Offset 0 minutes from sunrise" is identical to TRIGGER_SUNRISE and is
+        // never set intentionally; treat it as a mis-saved TRIGGER_MANUAL and fix it.
+        {
+            bool migrated = false;
+            for (int si = 0; si < _slotConfig.slotCount; si++) {
+                WateringSlot& s = _slotConfig.slots[si];
+                if (s.triggerType == TRIGGER_OFFSET
+                        && s.offsetMinutes == 0
+                        && s.offsetBase == OFFSET_BASE_SUNRISE) {
+                    Serial.printf("[Config] Migration: slot '%s' triggerType OFFSET+0@sunrise → MANUAL\n", s.name);
+                    s.triggerType = TRIGGER_MANUAL;
+                    migrated = true;
+                }
+            }
+            if (migrated) saveSlotConfig();
+        }
+
         return true;
     }
 
